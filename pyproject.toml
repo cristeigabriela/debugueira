@@ -1,0 +1,28 @@
+[project]
+name = "debugueira"
+version = "0.1.0"
+description = "A WinDbg session manager for agents: many live cdb sessions, searchable logs, and history"
+readme = "README.md"
+authors = [
+    { name = "Gabriela Cristei" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+debugueira = "debugueira:main"
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.22.3",
+    "pytest>=9.1.1",
+    "ruff>=0.17.2",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"

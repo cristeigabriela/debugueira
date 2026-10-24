@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+
+# Test target build outputs
+tests/targets/bin/
+*.obj
+*.ilk
+tests/targets/dotnet/**/bin/
+tests/targets/dotnet/**/obj/
+
+# Blind agent trials (.claude/skills/blind-trial)
+.trials/
