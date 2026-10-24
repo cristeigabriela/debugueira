@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Put the SDK's cdb on PATH
+        shell: pwsh
+        run: ./.github/scripts/ensure-cdb.ps1
+
+      - run: uv sync --locked
+
+      - name: Test before shipping
+        run: |
+          uv run python tests/targets/build.py
+          uv run pytest -q
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ISCC.exe -ErrorAction SilentlyContinue) -and
+              -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Check the tag matches the version
+        shell: pwsh
+        run: |
+          $version = uv run python -c "import debugueira; print(debugueira.__version__)"
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} != version v$version" }
+
+      - name: Build the installer and zip
+        run: uv run python packaging/build.py
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/debugueira-*-setup.exe
+            dist/debugueira-*-win-x64.zip
+            dist/SHA256SUMS.txt
+          generate_release_notes: true

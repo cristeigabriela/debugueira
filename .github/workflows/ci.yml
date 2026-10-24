@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Put the SDK's cdb on PATH
+        shell: pwsh
+        run: ./.github/scripts/ensure-cdb.ps1
+
+      - run: uv sync --locked
+
+      - name: Lint
+        run: |
+          uv run ruff check
+          uv run ruff format --check
+
+      - name: Build the test targets
+        run: uv run python tests/targets/build.py
+
+      - name: Test
+        run: uv run pytest -v --durations=10
