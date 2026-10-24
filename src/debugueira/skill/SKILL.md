@@ -38,6 +38,7 @@ Every reply ends in a state line, like `[app · stopped at 0:000> · breakpoint 
 | `procs N` | Every process the session debugs: number, pid, state or exit code, command line. |
 | `stop N... [--kill \| --detach]` | End sessions. Default: kill a launched target (with its children), detach from an attached one. A launched target can't be detached: it lives in its session. |
 | `list` / `status N` | Live sessions / one session as JSON. |
+| `events [--session N] [--since 10m] [-n N]` | What happened across all sessions: each one starting and ending, each process starting, exiting or crashing. Handy after a session ends to see why. |
 | `log N [--cmd K] [--tail L]` | Read the log: one command's full output, or the end. |
 | `grep N REGEX [-C 2] [--cmd K]` | Search the raw log; hits print as `#cmd:line: text`. |
 | `query N 'python'` | Run Python over the session; only what it prints comes back (below). |

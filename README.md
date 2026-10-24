@@ -69,6 +69,7 @@ struct ctx * c = 0x00000000`00000000
 | **Reading without flooding** | `log --cmd N`, `grep REGEX -C 2`, `new`, `query 'python'` |
 | **Child processes** | followed by default; `--children none` or `"worker*.exe"`, `--break-on-child`, `procs` |
 | **History** | `history`, `history show ID`, `note`, and `log`/`grep`/`query` on finished sessions |
+| **Watching** | `watch` (a terminal UI over live sessions), `events` (what the daemon did: sessions and processes starting and ending) |
 | **Housekeeping** | `doctor`, `gc`, `daemon status`/`stop` |
 
 `query` runs a short Python snippet in the CLI and prints only what it prints, so an agent can compute an answer from WinDbg output instead of reading all of it:
@@ -86,6 +87,7 @@ Native targets with PDBs and .NET targets (SOS loads on its own) both work. The 
 - **Launched targets** are created suspended, with no window and pipes of their own, inside a kill-on-close job. cdb then attaches with `-pb -pr`. That gives clean tree cleanup, a real stdin for `input`, and no console windows.
 - **Attached targets** get `-pd`, so they survive even if the daemon is killed.
 - **Each session** writes `events.jsonl` (every command, every chunk of output, every event) and `meta.json` under `%LOCALAPPDATA%\debugueira\sessions\`. History is those folders. They're pruned after 90 days or 2 GB.
+- **The daemon** also keeps one journal across all sessions, for people: `debugueira events` reads it, `debugueira watch` shows it live. Colored output appears only at a real terminal, never in an agent's pipe.
 
 Settings live in `%LOCALAPPDATA%\debugueira\config.toml` (all optional): `cdb_path`, `idle_minutes`, `idle_cap_hours`, `daemon_idle_minutes`, `retention_days`, `retention_gb`, `head_lines`, `tail_lines`.
 
