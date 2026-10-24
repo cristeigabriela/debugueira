@@ -17,7 +17,7 @@ import traceback
 from dataclasses import fields
 from multiprocessing.connection import Listener
 
-from . import config, history, winapi
+from . import config, history, journal, winapi
 from .errors import DebugueiraError, NoSuchSessionError, SessionExistsError, UsageError
 from .eventlog import read_events, transcript
 from .session import Session, StartSpec
@@ -52,9 +52,13 @@ class Daemon:
         except OSError as e:
             log.info("another daemon holds the pipe (%s); exiting", e)
             return 0
+        journal.write("daemon started", text=f"pid {os.getpid()}")
         self.sweep_stale()
-        for removed in history.prune(self.cfg):
-            log.info("pruned %s", removed)
+        removed = history.prune(self.cfg)
+        for rec in removed:
+            log.info("pruned %s", rec)
+        if removed:
+            journal.write("history pruned", text=f"{len(removed)} old session(s)")
         info = {
             "pid": os.getpid(),
             "address": config.pipe_address(),
@@ -82,6 +86,7 @@ class Daemon:
                 session.stop(reason=f"daemon shutdown ({reason})")
             except DebugueiraError:
                 session.end(f"daemon shutdown ({reason})")
+        journal.write("daemon stopped", text=reason)
         try:
             info = json.loads(config.daemon_file().read_text(encoding="utf-8"))
             if info.get("pid") == os.getpid():
@@ -96,9 +101,12 @@ class Daemon:
             if not rec.live:
                 continue
             pid, created = rec.meta.get("cdb_pid"), rec.meta.get("cdb_created")
+            killed = ""
             if pid and winapi.is_same_process_alive(pid, created):
                 winapi.terminate(pid)
                 log.info("killed leftover cdb %d from %s", pid, rec.id)
+                killed = f"; killed its leftover cdb (pid {pid})"
+            journal.write("session closed out", session=rec.name, sid=rec.id, text=f"its daemon died{killed}")
             rec.meta.update(ended=time.time(), end_reason="daemon died")
             (rec.dir / "meta.json").write_text(json.dumps(rec.meta, indent=2), encoding="utf-8")
 
@@ -137,7 +145,10 @@ class Daemon:
                 req = conn.recv()
             except (EOFError, OSError):
                 return
-            self.last_request = time.monotonic()
+            # A watcher asks passively: looking at sessions mustn't keep the daemon from idling out.
+            passive = bool(req.get("passive"))
+            if not passive:
+                self.last_request = time.monotonic()
             try:
                 reply = self.handle(req)
             except DebugueiraError as e:
@@ -145,7 +156,8 @@ class Daemon:
             except Exception as e:  # noqa: BLE001 - a bug must reach the client as an answer, not a hang
                 log.error("request %r failed:\n%s", req.get("op"), traceback.format_exc())
                 reply = {"error": f"internal error: {e!r} (details in {config.daemon_log()})", "exit_code": 1}
-            self.last_request = time.monotonic()
+            if not passive:
+                self.last_request = time.monotonic()
             try:
                 conn.send(reply)
             except OSError:
@@ -188,8 +200,11 @@ class Daemon:
             reply = s.stop(req.get("how", ""))
             self.forget(s.name)
             return reply
+        # Nor may it keep a session from going idle.
+        touch = not req.get("passive")
         if op == "status":
-            s.touch()
+            if touch:
+                s.touch()
             return s.status()
         if op == "new":
             s.touch()
@@ -201,7 +216,8 @@ class Daemon:
                 s.shown_seq = s.log.seq
             return {**s.status(), "output": tidy("".join(e.output for e in entries if e.cmd >= 0))}
         if op == "procs":
-            s.touch()
+            if touch:
+                s.touch()
             return s.processes()
         raise UsageError(f"unknown request {op!r}")
 
@@ -222,9 +238,12 @@ class Daemon:
         reply = session.startup(spec.timeout)
         if session.cdb.exited:
             last = next((ln.strip() for ln in reversed(reply["output"].splitlines()) if ln.strip()), "")
+            journal.write("session failed", session=name, sid=session.id, text=f"cdb exited at start: {last}")
             session.end(f"cdb exited at start (code {session.cdb.proc.returncode})")
             self.forget(name)
             reply.update(state="exited", error=f"cdb exited at start: {last or 'no output'}", exit_code=4)
+        else:
+            journal.write("session started", session=name, sid=session.id, text=session.describe())
         return reply
 
 

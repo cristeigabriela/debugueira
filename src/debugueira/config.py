@@ -27,7 +27,13 @@ def daemon_file() -> Path:
 
 
 def daemon_log() -> Path:
+    """The daemon's own diagnostics, for debugging debugueira itself."""
     return home() / "daemon.log"
+
+
+def journal_file() -> Path:
+    """What happened across all sessions, for people: see `journal`."""
+    return home() / "journal.jsonl"
 
 
 def pipe_address() -> str:

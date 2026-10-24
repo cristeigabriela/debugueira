@@ -5,6 +5,7 @@ folded line says where the full text is.
 """
 
 import re
+from dataclasses import dataclass
 
 _DROP = re.compile(
     "|".join(  # noqa: FLY002 - one pattern per line, each with its reason
@@ -88,10 +89,20 @@ def stop_reason(text: str) -> str:
     return max(found)[1] if found else ""
 
 
-def exceptions(text: str) -> list[tuple[int, str]]:
-    """Every (pid, code) of a crash-like exception in `text`, in order: no breakpoints or steps."""
+@dataclass(frozen=True)
+class Fault:
+    """A crash-like exception cdb reported."""
+
+    pid: int
+    name: str  # cdb's own words, e.g. "Access violation"
+    code: str  # hex, e.g. "c0000005"
+    second_chance: bool
+
+
+def exceptions(text: str) -> list[Fault]:
+    """Every crash-like exception in `text`, in order: no breakpoints or steps."""
     return [
-        (int(m.group("pid"), 16), m.group("code"))
+        Fault(int(m.group("pid"), 16), m.group("name"), m.group("code"), "second" in m.group("chance"))
         for m in _EXCEPTION.finditer(text)
         if m.group("code") not in _NOT_A_CRASH
     ]
