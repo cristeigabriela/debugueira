@@ -61,6 +61,9 @@ def pyinstaller() -> None:
         # Onedir, not onefile: onefile unpacks to temp on every call, and agents call it hundreds of times.
         "--add-data",
         f"{ROOT / 'src' / 'debugueira' / 'skill' / 'SKILL.md'}{os.pathsep}debugueira/skill",
+        # Textual loads widgets and CSS by name at runtime, so PyInstaller can't see them: collect it whole.
+        "--collect-all",
+        "textual",
         str(ROOT / "packaging" / "entry.py"),
     )
 

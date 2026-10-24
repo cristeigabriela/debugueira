@@ -27,7 +27,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from . import config, minidump, winapi
+from . import config, journal, minidump, winapi
 from .cdb import Cdb, find_cdb
 from .errors import BreakFailedError, InputUnavailableError, SessionEndedError, TargetRunningError, UsageError
 from .eventlog import EventLog
@@ -222,6 +222,7 @@ class Session:
         self._log_cmd = 0  # the command that output is being logged under right now
         self.shown_seq = 0
         self._run_text = ""  # output replies took while the target ran: a stop's first lines can be in it
+        self.last_reason = ""  # why it's stopped, for `list` and `watch`
         self.ended: str | None = None
         self.last_activity = time.monotonic()
         idle = spec.idle_minutes or cfg.idle_minutes
@@ -314,11 +315,16 @@ class Session:
                 self._child_started(int(m.group(1)), int(m.group(2), 16))
             elif m := EXIT_PROCESS.search(line):
                 proc = self.procs.get(int(m.group(2), 16))
-                if proc:
+                if proc and not proc.exit_code:
                     proc.exit_code = m.group(3)
-            for pid, code in exceptions(line):
-                if pid in self.procs:
-                    self.procs[pid].crash = code
+                    self._journal("process exited", f"{proc.label} (pid {proc.pid}): {proc.state(False)}")
+            for fault in exceptions(line):
+                proc = self.procs.get(fault.pid)
+                if proc:
+                    proc.crash = fault.code
+                chance = "second chance" if fault.second_chance else "first chance"
+                where = proc.label if proc else f"pid {fault.pid}"
+                self._journal("exception", f"{fault.name.lower()} {fault.code} ({chance}) in {where}")
 
     def _child_started(self, number: int, pid: int) -> Proc:
         proc = self.procs.get(pid)
@@ -326,9 +332,24 @@ class Session:
             return proc
         # Read now, while the child is held at its creation event; a short-lived one is soon gone.
         proc = self.procs[pid] = Proc(number, pid, winapi.command_line(pid) or "?")
+        self._journal("process started", f"child {number}: {proc.label} (pid {pid})")
         if not self._quiet_depth:
             self._note(f"child {number} (pid {pid:#x}) started: {proc.command_line}")
         return proc
+
+    def _journal(self, event: str, text: str) -> None:
+        journal.write(event, session=self.name, sid=self.id, text=text)
+
+    def describe(self) -> str:
+        """What this session debugs, in a few words, for the journal."""
+        root = self.procs.get(self.meta.get("target_pid") or 0)
+        label = root.label if root else self.target_label()
+        if self.spec.mode == "launch":
+            return f"launch {label} (pid {root.pid if root else '?'})"
+        if self.spec.mode == "attach":
+            how = "noninvasively " if self.spec.noninvasive else ""
+            return f"attach {how}to {label} (pid {self.meta.get('target_pid')})"
+        return f"open {self.spec.dump}"
 
     def _note(self, text: str) -> None:
         """A line from debugueira itself: logged as an event, and shown inline in the reply."""
@@ -372,6 +393,11 @@ class Session:
             if not reason and not startup:
                 reason = self._stop_reason(self._run_text + output, prompt or "") or self._exited_reason()
             self._run_text = ""
+        # Why it's stopped stays true until it runs again; `list` and `watch` show it.
+        if state != "prompt":
+            self.last_reason = ""
+        elif reason and not reason.startswith("--for"):
+            self.last_reason = reason
         return {
             "session": self.name, "id": self.id, "cmd": self.cmd_id, "state": state,
             "prompt": (prompt or "").strip(), "reason": reason, "output": tidy(output, startup=startup),
@@ -613,6 +639,7 @@ class Session:
             self.job = self.cdb_job = 0
             # Under the agent's last command, so `log` (which hides debugueira's own) still shows it.
             self.log.write("event", cmd=self.cmd_id, text=f"session ended: {reason}")
+            self._journal("session ended", reason)
             self.meta.update(ended=time.time(), end_reason=reason, cdb_exit=self.cdb.proc.returncode)
             self.save_meta()
             self.log.close()
@@ -624,6 +651,8 @@ class Session:
             "idle_for": round(self.idle_for()), "idle_limit": round(self.idle_seconds),
             "cdb_pid": self.cdb.pid, "target_pid": self.meta.get("target_pid"), "dir": str(self.dir),
             "reason": self._exited_reason(),
+            # Not `reason`: replies built on this status mustn't repeat an old stop as if it were new.
+            "stop_reason": self.last_reason if self.cdb.state() == "prompt" else "",
         }  # fmt: skip
 
     def processes(self) -> dict:
@@ -695,6 +724,9 @@ class Session:
                 self._note(f"{started}; {image} matches, following it")
             else:
                 self._note(f"{started}; {image} doesn't match, detached")
+                self._journal(
+                    "process detached", f"{proc.label} (pid {proc.pid}): not in {self.spec.children}"
+                )
                 proc.detached = True
                 self._quiet(".detach", timeout)
             self._log_cmd = self._next_id("children")
