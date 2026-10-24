@@ -97,6 +97,12 @@ kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
 kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
 kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
 kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+kernel32.QueryFullProcessImageNameW.argtypes = [
+    wintypes.HANDLE,
+    wintypes.DWORD,
+    wintypes.LPWSTR,
+    ctypes.POINTER(wintypes.DWORD),
+]
 ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
 
 STILL_ACTIVE = 259
@@ -226,6 +232,21 @@ def command_line(pid: int) -> str | None:
             return None
         ustr = UNICODE_STRING.from_buffer(buf)
         return ctypes.wstring_at(ustr.Buffer, ustr.Length // 2) if ustr.Buffer else None
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def image_path(pid: int) -> str | None:
+    """A running process's exe as a full Win32 path, or None if it's gone or out of reach."""
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None
+    try:
+        buf = ctypes.create_unicode_buffer(32768)
+        size = wintypes.DWORD(len(buf))
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            return None
+        return buf.value
     finally:
         kernel32.CloseHandle(handle)
 

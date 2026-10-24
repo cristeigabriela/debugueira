@@ -20,7 +20,7 @@ debugueira stop app                                    # always stop when done
 
 **Sessions are shared by everything running as your user**, other agents included. Always pass `--name` with a name of your own (a common prefix helps: `history --name myprefix`); `list` may show sessions that aren't yours, so leave those alone.
 
-Every reply ends in a state line, like `[app · stopped at 0:000> · breakpoint 0 · cmd #4]`, `[app · stopped at 4:005> · access violation (first chance) in child 4: worker.exe 3 · cmd #2]`, `[app · running · cmd #5]` or `[app · ended · target killed (pid 1234)]`. Your first command is #1; the `start` reply has no number yet.
+Every reply ends in a state line, like `[app · stopped at 0:000> · breakpoint 0 · cmd #4]`, `[app · stopped at 4:005> · access violation (first chance) in child 4: worker.exe 3 · cmd #2]`, `[app · running · cmd #5]` or `[app · ended · target killed (pid 1234)]`. Your first command is #1. The `start` and `attach` replies have no number yet; they name the target's pid instead, in both bases (`pid 4660 (0x1234)`), since cdb prints pids in hex and `tasklist` in decimal.
 
 ## Commands
 
@@ -49,7 +49,7 @@ Every reply ends in a state line, like `[app · stopped at 0:000> · breakpoint 
 
 ## Keep your context small
 
-Replies drop cdb's noise (banners, NatVis, symbol-path tables, SOS extension loads, CLR notification exceptions), fold runs of `ModLoad:` lines into one, and keep only the first 60 and last 90 lines of long output. The `start` reply keeps the symbol search path, which helps when symbols fail. Don't reach for `--full` first:
+Replies drop cdb's noise (banners, NatVis, symbol-path tables, SOS extension loads, CLR notifications), fold runs of `ModLoad:` lines into one, and keep only the first 60 and last 90 lines of long output. The `start` reply keeps the symbol search path, which helps when symbols fail. Don't reach for `--full` first:
 
 - **One command's full output:** `debugueira log app --cmd 12 --full`
 - **Find a line:** `debugueira grep app "Access violation" -C 3`
@@ -80,13 +80,14 @@ What a snippet prints is trimmed like any reply (`--full` to keep it all), and o
 - **While it runs, `cmd` is refused.** Use `wait`, `break`, `input`, `new`, `procs`, `log` or `grep`.
 - **One execution command per `cmd`.** In a chain like `p; p; dv`, cdb doesn't print what each step did. Run `p`, `t`, `gu` and `g` on their own.
 - **Locals at a function's first instruction are garbage:** the prologue hasn't stored the arguments yet. Read them from registers (`r rcx, rdx, r8, r9` on x64), or step past the prologue (`p` a few times, or `bp` on a source line with `` bp `app.c:42` ``).
+- **A function's return value:** `gu` runs to where it returns, then `r rax` (the low 32 bits for an `int`). It works for managed methods too.
 - **Never send cdb's own `q`, `qd`, `.shell` or an empty line.** debugueira refuses them: `stop` ends a session properly, and `.shell` would wait for console input forever.
 - **Exit codes:** 0 stopped, 3 running, 4 session ended, 2 no such session, 1 error.
 
 ## A program that reads stdin
 
 1. `start --name app -- app.exe`, then `cmd app g --timeout 3`: it comes back `running` while the program waits for input.
-2. `input app "a line"`: the reply includes what the program printed in the next second (`--wait SECONDS` for longer); later output comes with `new app`.
+2. `input app "a line"`: the reply includes what the program printed in the next second (`--wait SECONDS` for longer); later output comes with `new app`. If the line makes it stop (say, at a breakpoint), the reply names the stop.
 3. `break app`, then `~*k`: thread 0 shows where it's blocked (e.g. `fgets` → `ReadFile`).
 4. `g --timeout 3`, more `input`, and finally the program's own quit command (or `stop`).
 
@@ -94,6 +95,7 @@ What a snippet prints is trimmed like any reply (`--full` to keep it all), and o
 
 - **The first stop is in cdb's own break-in thread** (`0:001> ntdll!DbgBreakPoint`). Switch to the thread you care about first: `~*k` lists every thread's stack, `~0s` switches to thread 0.
 - **`bp mod!func` says `Couldn't resolve`:** run `.reload` first, or use `bu mod!func` (deferred until the module loads).
+- **A breakpoint on a function that's already running never hits,** such as the loop the process sits in: its entry won't run again. Break inside the loop instead. `uf mod!func` lists its instructions; then `bp mod!func+0x1c` on one in the loop body.
 - **To read a function's locals:** find its frame with `k`, then `.frame N; dv /t /v`. `? local` prints the address; `?? local` (C++ expression) prints the value.
 - **To read a global:** `? dwo(mod!g_var)` for 4 bytes, `? qwo(...)` for 8, or `dd mod!g_var L1`. `poi()` reads pointer size (8 bytes), which is wrong for an `int` or a `long`.
 - **`--noninvasive` (and `peek`) don't take control:** no breakpoints, stepping or events, and the first stop is a `Wake debugger - code 80000007`. The threads stay suspended while the session is open, so two reads in one session see the same values.
@@ -104,11 +106,13 @@ What a snippet prints is trimmed like any reply (`--full` to keep it all), and o
 
 Launched and attached targets follow their child processes by default (`--children all`). Each child gets its own process number in the prompt (`2:005>`). `|` lists them, `|2s` switches, and `procs` shows them all with command lines and exit codes.
 
-- **Each child's start is shown inline,** as `[debugueira: child 4 (pid 0x3ef4) started: "worker.exe" 3]`. Its exit is logged as `Exit process 4:3ef4, code b`.
+- **Each child's start is shown inline,** as `[debugueira: child 4 (pid 0x3ef4) started: "worker.exe" 3]`. Its exit is logged as `Last event: 3ef4.2a10: Exit process 4:3ef4, code b`.
 - **`--children none`:** debug only the target. **`--children "worker*.exe,node.exe"`:** follow only matching images; the rest are detached, and the reply says so.
 - **`--break-on-child`:** stop when a followed child starts, so you can set breakpoints in it first.
-- **A crash in a child stops the whole session, inside that child,** and the state line names it. After a second-chance exception, `g` re-runs the faulting instruction. To let the rest continue, `.kill` (it ends the current process), then `g`. `procs` then shows `exit 0x80004005 (killed after c0000005)`: `.kill`'s code, with the crash's beside it. A crashing process's own exit code can't be observed under a debugger.
-- **When the last process exits,** the state line says `all processes exited` with the target's exit code. A further `g` prints cdb's `No runnable debuggees` error, which is normal. The session stays open for `log`, `grep` and `procs` until you `stop` it.
+- **A crash in a child stops the whole session, inside that child,** and the state line names it. After a second-chance exception, `g` re-runs the faulting instruction. To let the rest continue:
+  - **`gn`** lets the crash end that process, as it would outside a debugger: its parent sees the crash's own exit code (`0xC0000005`). Use it when the program reacts to its children's exit codes.
+  - **`.kill`, then `g`,** ends the process too, but with `.kill`'s exit code. `procs` shows `exit 0x80004005 (killed after c0000005)`, and the parent sees `0x80004005`.
+- **When the last process exits,** the state line says `all processes exited` with the target's exit code, and every later one says it too. A further `g` prints cdb's `No runnable debuggees` error, which is normal. The session stays open for `log`, `grep` and `procs` until you `stop` it.
 
 ## .NET
 
@@ -131,6 +135,7 @@ SOS loads by itself when the runtime loads. A .NET app's `.exe` shows up as `app
 - **Write one** from a stopped session: `cmd app ".dump /ma C:\dumps\app.dmp"`. cdb calls it a "mini user dump" even with `/ma`; `/ma` means full memory.
 - **Open one:** `open --name d C:\dumps\app.dmp`. The state line names the exception it holds. Then `.ecxr; k` (the crash's own context) and `.exr -1` (the exception record).
 - **Symbols:** a dump has no exe folder to look in, so pass `--sym C:\pdbs` when the PDBs aren't at the path they were built at.
+- **A truncated dump** (a cut-off copy or upload) opens all the same, so the reply says so: the state line reads `dump (truncated): ...`, and a note gives how many bytes are there. Memory past the cut reads as `??`, and stacks can end early, so don't trust what's missing.
 
 ## Lifecycle
 
@@ -143,4 +148,4 @@ SOS loads by itself when the runtime loads. A .NET app's `.exe` shows up as `app
 - **No symbols:** PDBs next to the exe load automatically. Otherwise use `--sym C:\pdbs` (repeatable), then `.reload /f` and `lm`.
 - **"no session named":** `debugueira list`, or `debugueira history` for finished ones.
 - **Setup problems:** `debugueira doctor`.
-- **A frozen attached target** (history says `daemon died`, and it makes no progress): attach again and run `~`. Under a session, a healthy thread reads `Suspend: 1`. Resume each thread that reads more with `~Nm` (`~*m` for all), until each reads 1. Then `!chkimg -f MODULE` (e.g. `ntdll`) restores any stray `int 3`. Then `g`: if it stops at a leftover break exception, that's the event cdb died on. Then `stop`.
+- **A frozen attached target** (history says `daemon died`, and it makes no progress): attach again and run `~`. Under a session, a healthy thread reads `Suspend: 1`. Resume each thread that reads more with `~Nm` (`~*m` for all), until each reads 1. Then `!chkimg -f MODULE` restores any stray `int 3` in that module: run it for each module that had breakpoints, usually the program's own (`!chkimg -f app`). Then `g`: if it stops at a leftover break exception, that's the event cdb died on. Then `stop`.

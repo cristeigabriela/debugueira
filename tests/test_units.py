@@ -1,15 +1,18 @@
 """Unit tests for the pure parts: prompt detection, logs, trimming, history lookup, query helpers, argv."""
 
 import json
+import struct
 import time
 
 import pytest
 
-from debugueira import config, history, output
+from debugueira import config, history, minidump, output
 from debugueira.cdb import PROMPT
 from debugueira.eventlog import EventLog, grep, read_events, transcript
+from debugueira.minidump import MEMORY64_LIST, MEMORY_LIST
 from debugueira.query import Out, hexint
-from debugueira.session import StartSpec, cdb_argv, setup_commands
+from debugueira.session import Proc, StartSpec, cdb_argv, process_rows, setup_commands
+from debugueira.tidy import tidy
 
 
 @pytest.mark.parametrize(
@@ -163,6 +166,13 @@ def test_attach_always_passes_pd_so_a_crash_never_kills_the_target():
     assert argv[-3:] == ["-pd", "-p", "42"]
 
 
+def test_attach_puts_the_targets_folder_on_the_symbol_path():
+    argv = cdb_argv(StartSpec(mode="attach", pid=42), "cdb.exe", image="C:\\apps\\loop.exe")
+    assert argv[argv.index("-y") + 1].split(";")[0] == "C:\\apps", (
+        "`!chkimg` finds the attached exe, and its PDB, only on the symbol path"
+    )
+
+
 def test_a_launch_attaches_to_the_suspended_target_and_resumes_it_with_one_stop():
     argv = cdb_argv(StartSpec(mode="launch", target=["C:\\a.exe"]), "cdb.exe", launched_pid=7)
     assert argv[-4:] == ["-pb", "-pr", "-p", "7"]
@@ -205,3 +215,79 @@ def test_a_held_line_is_released_on_flush_and_never_continued():
     assert m.held() == "Enter name: "
     out = m.flush() + m.feed("0:000> \n", "cdb")
     assert "".join(t for t, _ in out) == "Enter name: \n0:000> \n", "the flushed line ends before cdb's"
+
+
+def test_procs_lists_processes_in_the_order_they_started():
+    procs = [
+        Proc(0, 10, "spawner.exe"),
+        Proc(1, 11, "worker.exe 0", exit_code="0"),
+        Proc(2, 12, "worker.exe 1"),
+        Proc(1, 13, "side.exe"),
+    ]
+    rows = process_rows(procs, "0:000> ")
+    assert [r["command_line"] for r in rows] == ["spawner.exe", "worker.exe 0", "worker.exe 1", "side.exe"], (
+        "side.exe took worker 0's number once worker 0 exited, but it started last"
+    )
+
+
+def _modload(path: str, at: int) -> str:
+    return f"ModLoad: 00007ff9`{at:08x} 00007ff9`{at + 0x1000:08x}   {path}\n"
+
+
+def test_module_loads_in_several_processes_fold_each_name_once_with_a_count():
+    text = "".join(_modload("C:\\Windows\\System32\\kernel.appcore.dll", i << 16) for i in range(3))
+    assert tidy(text) == "[3 module loads: kernel.appcore.dll ×3]\n", (
+        "three names alike read as one DLL thrice"
+    )
+
+
+def test_clr_notifications_drop_out_so_the_module_loads_around_them_fold():
+    text = (
+        _modload("C:\\dotnet\\System.Runtime.dll", 0x10000)
+        + "CLR notification: module 'System.Runtime' loaded\n"
+        + _modload("C:\\dotnet\\System.Console.dll", 0x20000)
+        + "CLR notification: module 'System.Console' loaded\n"
+        + "CLR notification: method 'HelloNet.Program.Compute(Int32)' code generated\n"
+    )
+    assert tidy(text) == "[2 module loads: System.Runtime.dll, System.Console.dll]\n", tidy(text)
+
+
+def _minidump(kind: int) -> bytes:
+    """A minidump with one memory stream of `kind`, holding ranges of 100 and 50 bytes: 242 bytes whole."""
+    memory_at = 92  # right after a Memory64 list's two ranges; the shorter memory list is padded to match
+    if kind == MEMORY64_LIST:
+        stream = struct.pack("<QQ", 2, memory_at) + struct.pack("<QQQQ", 0x1000, 100, 0x2000, 50)
+    else:
+        stream = struct.pack("<I", 2) + struct.pack(
+            "<QIIQII", 0x1000, 100, memory_at, 0x2000, 50, memory_at + 100
+        )
+    header = b"MDMP" + struct.pack("<IIIIIQ", 0xA793, 1, 32, 0, 0, 0)
+    directory = struct.pack("<III", kind, len(stream), 44)
+    return (header + directory + stream).ljust(memory_at, b"\0") + b"\0" * 150
+
+
+@pytest.mark.parametrize(
+    ("kind", "keep", "short"),
+    [
+        (MEMORY64_LIST, 242, None),
+        (MEMORY64_LIST, 200, (200, 242)),
+        (MEMORY_LIST, 242, None),
+        (MEMORY_LIST, 200, (200, 242)),
+        # Cut inside the stream directory: the streams can't be read, but the directory alone is too long.
+        (MEMORY64_LIST, 40, (40, 44)),
+        (MEMORY64_LIST, 16, None),  # not even a header: not a dump this check can judge
+    ],
+    ids=[
+        "full-memory-whole",
+        "full-memory-cut",
+        "memory-list-whole",
+        "memory-list-cut",
+        "cut-in-directory",
+        "no-header",
+    ],
+)
+def test_a_minidump_is_short_by_what_its_own_streams_reach(tmp_path, kind, keep, short):
+    path = tmp_path / "a.dmp"
+    path.write_bytes(_minidump(kind)[:keep])
+    found = minidump.shortfall(str(path))
+    assert (None if found is None else (found.size, found.needed)) == short

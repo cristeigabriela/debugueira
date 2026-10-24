@@ -46,6 +46,26 @@ def test_a_glob_follows_matching_children_and_detaches_the_rest(dbg, targets):
     assert f":{side.group(1)}, code" not in exits, "a detached child's exit is no longer seen"
 
 
+def test_a_glob_policy_reply_has_no_child_creation_stops_or_bare_prompts(dbg, targets):
+    dbg.ok("start", "--name", "s", "--children", "worker*.exe", "--", str(targets["spawner"]))
+    out = _finish_spawner(dbg, "s")
+    assert not re.search(r"^\d+:\d+> *$", out, re.MULTILINE), (
+        f"debugueira resumes from each child's start itself, so the agent sees no prompt for it:\n{out}"
+    )
+    assert "Detached" not in out, f"the detach is debugueira's, said by its own note:\n{out}"
+
+
+def test_gn_at_a_second_chance_lets_the_crashs_own_exit_code_through(dbg, targets):
+    dbg.ok("start", "--name", "s", "--", str(targets["spawner"]))
+    assert "(first chance)" in dbg.ok("cmd", "s", "g", "--timeout", "30")
+    assert "(second chance)" in dbg.ok("cmd", "s", "g", "--timeout", "30")
+    out = dbg.ok("cmd", "s", "gn", "--timeout", "30", "--full") + _run_until(dbg, "s", "all processes exited")
+    assert "child worker.exe 3 exit=0xC0000005" in out, (
+        f"spawner sees the crash's code, as outside a debugger:\n{out}"
+    )
+    assert re.search(r"exit 0xc0000005 +\".*worker\.exe\" 3", dbg.ok("procs", "s")), "with no `.kill` in it"
+
+
 def test_children_none_lets_every_child_run_free(dbg, targets):
     dbg.ok("start", "--name", "s", "--children", "none", "--", str(targets["spawner"]))
     out = dbg.ok("cmd", "s", "g", "--timeout", "30", "--full")

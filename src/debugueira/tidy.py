@@ -27,6 +27,9 @@ _DROP = re.compile(
             # The runtime's private exceptions: they never stop the target and say nothing to the agent.
             r"^\([0-9a-f]+\.[0-9a-f]+\): CLR notification exception - code e0444143 \(first chance\)\n?",
             r"^\([0-9a-f]+\.[0-9a-f]+\): Unknown exception - code 04242420 \(first chance\)\n?",
+            # SOS's notes while a `!bpmd` is pending, one per managed module and JIT; the `JITTED` line that
+            # matters stays. Left in, each one splits the run of module loads around it.
+            r"^CLR notification: .*\n?",
         ]
     ),
     re.MULTILINE,
@@ -59,9 +62,14 @@ def _fold_modloads(m: re.Match) -> str:
     lines = m.group(0).splitlines()
     if len(lines) < 2:
         return m.group(0)
-    names = [ln.split()[-1].rsplit("\\", 1)[-1] for ln in lines]
+    counts: dict[str, int] = {}
+    for ln in lines:
+        name = ln.split()[-1].rsplit("\\", 1)[-1]
+        counts[name] = counts.get(name, 0) + 1
+    # The same DLL loading into several child processes reads as one name with a count.
+    names = [f"{name} ×{n}" if n > 1 else name for name, n in counts.items()]
     shown = ", ".join(names[:5]) + (f", +{len(names) - 5} more" if len(names) > 5 else "")
-    return f"[{len(names)} module loads: {shown}]\n"
+    return f"[{len(lines)} module loads: {shown}]\n"
 
 
 def tidy(text: str, startup: bool = False) -> str:

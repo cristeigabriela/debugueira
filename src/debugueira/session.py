@@ -27,7 +27,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from . import config, winapi
+from . import config, minidump, winapi
 from .cdb import Cdb, find_cdb
 from .errors import BreakFailedError, InputUnavailableError, SessionEndedError, TargetRunningError, UsageError
 from .eventlog import EventLog
@@ -44,6 +44,13 @@ INTERNAL = {"setup", "children", "stop"}
 QUIT = re.compile(r"(?:^|[;{])\s*(?:q|qq|qd)\s*(?:[;}]|$)", re.IGNORECASE)
 # Commands that block on cdb's console input: over pipes they'd leave the session wedged.
 CONSOLE_INPUT = re.compile(r"(?:^|[;{])\s*\.shell\b", re.IGNORECASE)
+# The end of an `sxe cpr` stop: the current instruction (after its symbol, when cdb prints one) and the
+# child's prompt. debugueira resumes from that stop itself, so the agent never needs to see it.
+CHILD_STOP = re.compile(r"(?:^\S+:\n)?^[0-9a-f]{8}`[0-9a-f]{8} .*\n\d+:\d+(?::\w+)?> \Z", re.MULTILINE)
+# A stop's first line: once one shows, its prompt is moments away.
+STOP_STARTED = re.compile(
+    r"^Breakpoint \d+ hit|^\([0-9a-f]+\.[0-9a-f]+\): .+ - code [0-9a-f]+ \(", re.MULTILINE
+)
 
 
 def refusal(line: str, name: str) -> str:
@@ -85,13 +92,17 @@ class StartSpec:
     timeout: float = 120
 
 
-def cdb_argv(spec: StartSpec, cdb_path: str, launched_pid: int = 0) -> list[str]:
+def cdb_argv(spec: StartSpec, cdb_path: str, launched_pid: int = 0, image: str = "") -> list[str]:
+    """cdb's command line. `image` is an attached process's exe, when it could be read."""
     sym = [*spec.sym]
     if spec.env.get("_NT_SYMBOL_PATH"):
         sym.append(spec.env["_NT_SYMBOL_PATH"])
     if spec.mode == "launch" and spec.target:
         # PDBs next to the exe are the common case, and cdb doesn't look there on its own.
         sym.insert(0, str(Path(spec.target[0]).resolve().parent))
+    elif spec.mode == "attach" and image:
+        # The same for an attached exe; `!chkimg` also finds the exe's own image only here.
+        sym.insert(0, ntpath.dirname(image))
     sym.append("srv*")
     argv = [cdb_path, "-lines", "-y", ";".join(sym)]
     if spec.src:
@@ -180,6 +191,19 @@ class Proc:
         return "stopped" if stopped else "running"
 
 
+def process_rows(procs: list[Proc], prompt: str) -> list[dict]:
+    """Rows for `procs`, in the order the processes were first seen.
+
+    Not by number: cdb hands a gone process's number to the next one, so a late child would sort early.
+    """
+    current = int(prompt.split(":")[0]) if prompt[:1].isdigit() else None
+    return [
+        {"number": p.number, "pid": p.pid, "state": p.state(stopped=bool(prompt)), "command_line": p.command_line,
+         "crash": p.crash, "current": not p.gone and p.number == current}
+        for p in procs
+    ]  # fmt: skip
+
+
 class Session:
     def __init__(self, spec: StartSpec, name: str, cfg: config.Config):
         self.spec = spec
@@ -197,6 +221,7 @@ class Session:
         self._internal_id = 0  # debugueira's own commands count down from -1
         self._log_cmd = 0  # the command that output is being logged under right now
         self.shown_seq = 0
+        self._run_text = ""  # output replies took while the target ran: a stop's first lines can be in it
         self.ended: str | None = None
         self.last_activity = time.monotonic()
         idle = spec.idle_minutes or cfg.idle_minutes
@@ -227,7 +252,8 @@ class Session:
                     subprocess.list2cmdline(spec.target) if self.target else winapi.command_line(root) or ""
                 )
                 self.procs[root] = Proc(0, root, line)
-            self.argv = cdb_argv(spec, cdb_path, self.target.pid if self.target else 0)
+            image = (winapi.image_path(root) or "") if spec.mode == "attach" and root else ""
+            self.argv = cdb_argv(spec, cdb_path, self.target.pid if self.target else 0, image)
             self.meta = {
                 "id": self.id, "name": name, "mode": spec.mode, "spec": asdict(spec), "argv": self.argv,
                 "cwd": cwd, "started": time.time(), "ended": None, "end_reason": None,
@@ -338,8 +364,14 @@ class Session:
         if prompt and output.endswith(prompt):
             output = output[: -len(prompt)]
         state = self.cdb.state()
-        if not reason and state == "prompt" and not startup:
-            reason = self._stop_reason(output, prompt or "")
+        if state == "running":
+            # A reply can catch a stop's first line just before its prompt; the reply that sees the prompt
+            # still names the stop from it. Only the end can matter, so the start goes.
+            self._run_text = (self._run_text + output)[-65536:]
+        elif state == "prompt":
+            if not reason and not startup:
+                reason = self._stop_reason(self._run_text + output, prompt or "") or self._exited_reason()
+            self._run_text = ""
         return {
             "session": self.name, "id": self.id, "cmd": self.cmd_id, "state": state,
             "prompt": (prompt or "").strip(), "reason": reason, "output": tidy(output, startup=startup),
@@ -347,15 +379,10 @@ class Session:
 
     def _stop_reason(self, output: str, prompt: str) -> str:
         """Why the target stopped, naming the child it stopped in when that isn't the target itself."""
-        root = self.procs.get(self.meta.get("target_pid") or 0)
         if "No runnable debuggees" in output and self.spec.noninvasive:
             return "noninvasive: the target can't be run, stepped or stopped at breakpoints"
         if "No runnable debuggees" in output:
-            return (
-                f"all processes exited (target exit 0x{root.exit_code})"
-                if root and root.exit_code
-                else ("all processes exited")
-            )
+            return self._exited_reason(seen=True)
         if "Terminated.  Exit thread and process events will occur." in output:
             return "process terminated; `g` lets its exit through"
         reason = stop_reason(output)
@@ -370,6 +397,20 @@ class Session:
                 reason += f" in child {number}: {child.label}"
         return reason
 
+    def _exited_reason(self, seen: bool = False) -> str:
+        """`all processes exited` once every process the session debugs is gone (or cdb `seen` it say so).
+
+        Every later state line says it too, so it never reads like an ordinary stop.
+        """
+        if not seen and not (self.procs and all(p.gone for p in self.procs.values())):
+            return ""
+        root = self.procs.get(self.meta.get("target_pid") or 0)
+        return (
+            f"all processes exited (target exit 0x{root.exit_code})"
+            if root and root.exit_code
+            else "all processes exited"
+        )
+
     # --- operations ----------------------------------------------------------------------------
 
     def startup(self, timeout: float) -> dict:
@@ -382,9 +423,25 @@ class Session:
                     self._send(line, timeout=30, source="setup")
                 # Setup chatter stays in the log, out of the agent's way.
                 self.cdb.take()
+            if self.spec.mode != "dump":
+                # cdb names processes in hex, `stop` and tasklist in decimal: say both, once.
+                root = self.meta.get("target_pid")
+                return self._reply(out, startup=True, reason=f"pid {root} ({root:#x})" if root else "")
             # A dump opens on the exception it holds; name it like a live stop.
-            held = stop_reason(out) if self.spec.mode == "dump" else ""
-            return self._reply(out, startup=True, reason=f"dump: {held}" if held else "")
+            held = stop_reason(out)
+            short = minidump.shortfall(self.spec.dump)
+            kind = "dump (truncated)" if short else "dump"
+            reply = self._reply(
+                out, startup=True, reason=f"{kind}: {held}" if held else kind if short else ""
+            )
+            if short:
+                text = (
+                    f"this dump is cut short: {short.size:,} of its {short.needed:,} bytes are here, so memory "
+                    "past the cut reads as ?? and stacks can end early"
+                )
+                self.log.write("event", cmd=0, text=text)
+                reply["output"] = reply["output"].rstrip("\n") + f"\n[debugueira: {text}]\n"
+            return reply
 
     def _next_id(self, source: str) -> int:
         if source in INTERNAL:
@@ -459,7 +516,9 @@ class Session:
             if not any(winapi.debug_break(pid) for pid in pids):
                 raise BreakFailedError(self.name, pids)
             self.cdb.wait_prompt(since, timeout)
-            # A break-in is its own reason; the break instruction behind it says nothing new.
+            # A break-in is its own reason; the break instruction behind it says nothing new. History reads
+            # the raw output, where it would look like the program's own `int 3`, so it's logged too.
+            self.log.write("stop", cmd=self.cmd_id, reason="broke in")
             return self._reply(self.cdb.take(), reason="broke in (cdb's thread; ~0s for the main one)")
 
     def input(self, text: str, wait: float = 1.0) -> dict:
@@ -489,7 +548,13 @@ class Session:
                 raise UsageError(
                     f"the target's stdin is closed ({e.strerror or e}): it has likely exited"
                 ) from e
-            self.cdb.wait(lambda: len(self.cdb.visible()) > before, wait)
+
+            def answered() -> bool:
+                new = self.cdb.visible()[before:]
+                # A stop's first line can come alone: wait on for its prompt, so the reply says stopped.
+                return bool(new) and (self.cdb.prompt is not None or not STOP_STARTED.search(new))
+
+            self.cdb.wait(answered, wait)
             return self._reply(self.cdb.take())
 
     def stop(self, how: str = "", reason: str = "") -> dict:
@@ -530,6 +595,8 @@ class Session:
             }[how]
             if already and how != "close":
                 done = f"target had already exited (exit 0x{already})"
+                # History must not say `kill` for a target nothing killed.
+                reason = reason or f"stopped; {done}"
             self.end(reason or f"stopped ({how})")
             return {**self._reply("", reason=done), "state": "exited"}
 
@@ -556,18 +623,13 @@ class Session:
             "prompt": (self.cdb.prompt or "").strip(), "target": self.target_label(), "cmd": self.cmd_id,
             "idle_for": round(self.idle_for()), "idle_limit": round(self.idle_seconds),
             "cdb_pid": self.cdb.pid, "target_pid": self.meta.get("target_pid"), "dir": str(self.dir),
+            "reason": self._exited_reason(),
         }  # fmt: skip
 
     def processes(self) -> dict:
         """Every process this session has debugged, with its command line, state and exit code."""
         with self.cdb._cond:
-            prompt = self.cdb.prompt or ""
-            current = int(prompt.split(":")[0]) if prompt[:1].isdigit() else None
-            rows = []
-            for p in sorted(self.procs.values(), key=lambda p: (p.number, p.pid)):
-                rows.append({"number": p.number, "pid": p.pid, "state": p.state(stopped=bool(prompt)),
-                             "command_line": p.command_line, "crash": p.crash,
-                             "current": not p.gone and p.number == current})  # fmt: skip
+            rows = process_rows(list(self.procs.values()), self.cdb.prompt or "")
         return {**self.status(), "processes": rows}
 
     def target_label(self) -> str:
@@ -622,18 +684,22 @@ class Session:
             name = re.search(r"name:\s*(.+?)\s*$", self._quiet("|."), re.MULTILINE)
             image = Path(name.group(1)).name if name else "?"
             started = f"child {proc.number} (pid {proc.pid:#x}) started: {proc.command_line}"
-            if any(fnmatch.fnmatch(image.lower(), g) for g in globs):
+            follow = any(fnmatch.fnmatch(image.lower(), g) for g in globs)
+            if follow and self.spec.break_on_child:
                 self._note(f"{started}; {image} matches, following it")
-                if self.spec.break_on_child:
-                    return
-                line = "g"
+                return
+            # The agent asked for neither this stop nor its prompt; the log keeps them.
+            with self.cdb._cond:
+                self.cdb.pending = CHILD_STOP.sub("", self.cdb.pending, count=1)
+            if follow:
+                self._note(f"{started}; {image} matches, following it")
             else:
                 self._note(f"{started}; {image} doesn't match, detached")
                 proc.detached = True
-                line = ".detach; g"
+                self._quiet(".detach", timeout)
             self._log_cmd = self._next_id("children")
-            self.log.write("cmd", cmd=self._log_cmd, line=line, source="children")
+            self.log.write("cmd", cmd=self._log_cmd, line="g", source="children")
             since = self.cdb.produced
-            self.cdb.send(line)
+            self.cdb.send("g")
             self.cdb.wait_prompt(since, timeout)
             self._log_cmd = self.cmd_id

@@ -216,9 +216,9 @@ def cmd_list(args) -> int:
         left = max(0, s["idle_limit"] - s["idle_for"])
         left_text = f"{left // 60}m" if left >= 60 else f"{left}s"
         state = f"stopped {s['prompt']}" if s["state"] == "prompt" else s["state"]
-        _print(
-            f"{s['session']:<10} {state:<16} {s['mode']:<7} {s['target'][:60]:<60} ends if idle {left_text}"
-        )
+        # A long path keeps its end: the file name tells two sessions apart, the folders rarely do.
+        target = s["target"] if len(s["target"]) <= 60 else "…" + s["target"][-59:]
+        _print(f"{s['session']:<10} {state:<16} {s['mode']:<7} {target:<60} ends if idle {left_text}")
     return 0
 
 
@@ -437,8 +437,13 @@ def cmd_help_agents(args) -> int:
 def cmd_daemon(args) -> int:
     if args.action == "stop":
         try:
-            client.request("shutdown", start=False)
-            _print("daemon stopping; live sessions end by mode")
+            live = client.request("shutdown", start=False).get("sessions", 0)
+            _print(
+                f"daemon stopping; {live} live session(s) end as `stop` ends them: launched targets killed, "
+                "attached ones detached, dumps closed"
+                if live
+                else "daemon stopping; no live sessions"
+            )
         except DebugueiraError:
             _print("daemon not running")
         return 0

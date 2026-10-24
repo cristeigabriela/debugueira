@@ -38,7 +38,7 @@ From source: `uv sync`, then `uv run debugueira ...`.
 ...
 ntdll!LdrpDoDebuggerBreak+0x35:
 00007ff9`64b226c9 cc              int     3
-[c · stopped at 0:000>]
+[c · stopped at 0:000> · pid 22324 (0x5734)]
 
 > debugueira cmd c g
 about to crash

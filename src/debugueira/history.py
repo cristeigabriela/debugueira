@@ -107,7 +107,7 @@ def summary(rec: Record) -> str:
     for entry in transcript(read_events(rec.events)):
         if entry.cmd <= 0 or entry.source in INTERNAL:
             continue
-        lines.append(f"#{entry.cmd:<4} {entry.line[:60]:<60}  {gist(entry.output)[:80]}")
+        lines.append(f"#{entry.cmd:<4} {entry.line[:60]:<60}  {(entry.stop or gist(entry.output))[:80]}")
     return "\n".join(lines)
 
 

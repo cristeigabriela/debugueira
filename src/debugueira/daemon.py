@@ -169,8 +169,10 @@ class Daemon:
             with self.lock:
                 return {"sessions": [s.status() for s in self.sessions.values()]}
         if op == "shutdown":
+            with self.lock:
+                live = len(self.sessions)
             threading.Thread(target=self.shutdown, args=("requested",), daemon=True).start()
-            return {"ok": True}
+            return {"ok": True, "sessions": live}
         s = self.session(req["name"])
         if op == "cmd":
             try:

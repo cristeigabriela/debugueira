@@ -55,6 +55,7 @@ class Entry:
     chunks: list[str] = field(default_factory=list)
     first_seq: int = 0
     last_seq: int = 0
+    stop: str = ""  # why the command's run stopped, when the output alone would say it wrong (a break-in)
 
     @property
     def output(self) -> str:
@@ -96,6 +97,8 @@ def transcript(events: Iterator[dict], since: int = 0) -> list[Entry]:
             fresh = not entry.chunks or entry.chunks[-1].endswith("\n")
             entry.chunks.append(f"{'' if fresh else chr(10)}[debugueira: {ev['text']}]\n")
             entry.last_seq = ev["seq"]
+        elif ev["kind"] == "stop":
+            entries.setdefault(ev["cmd"], Entry(ev["cmd"], first_seq=ev["seq"])).stop = ev["reason"]
     return list(entries.values())
 
 

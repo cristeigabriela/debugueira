@@ -2,6 +2,7 @@
 
 import json
 import re
+import shutil
 
 from conftest import finish_spawner, requires_cdb
 
@@ -31,6 +32,32 @@ def test_the_state_line_names_the_breakpoint_that_hit(dbg, targets):
     dbg.ok("start", "--name", "h", "--", str(targets["hello"]))
     dbg.ok("cmd", "h", "bp hello!add")
     assert "· breakpoint 0 ·" in dbg.ok("cmd", "h", "g")
+
+
+def test_start_names_the_target_pid_in_both_bases(dbg, targets):
+    out = dbg.ok("start", "--name", "h", "--", str(targets["hello"]))
+    m = re.search(r"· pid (\d+) \((0x[0-9a-f]+)\)\]", out)
+    assert m and int(m.group(1)) == int(m.group(2), 16), f"cdb says hex, `stop` and tasklist decimal:\n{out}"
+    assert int(m.group(1)) == next(x for x in dbg.metas() if x["name"] == "h")["target_pid"]
+
+
+def test_attach_names_the_target_pid_in_both_bases(dbg, targets, spawn):
+    _, pid = spawn(targets["loop"])
+    assert f"· pid {pid} ({pid:#x})]" in dbg.ok("attach", "--name", "a", "--pid", str(pid))
+
+
+def test_list_keeps_the_file_name_of_a_long_target_path(dbg, targets, tmp_path):
+    exe = tmp_path / ("a-folder-with-a-long-name-" * 3) / "hello-renamed.exe"
+    exe.parent.mkdir(parents=True)
+    shutil.copy(targets["hello"], exe)
+    dbg.ok("start", "--name", "h", "--", str(exe))
+    assert "hello-renamed.exe" in dbg.ok("list"), "the file name tells two sessions apart, so it stays"
+
+
+def test_daemon_stop_says_how_many_live_sessions_end(dbg, targets):
+    dbg.ok("start", "--name", "h", "--", str(targets["hello"]))
+    out = dbg.ok("daemon", "stop")
+    assert "1 live session(s) end" in out and "launched targets killed" in out, out
 
 
 def test_stop_says_it_killed_a_launched_target(dbg, targets):
