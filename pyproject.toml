@@ -7,7 +7,9 @@ authors = [
     { name = "Gabriela Cristei" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "textual>=8.2.8",
+]
 
 [project.scripts]
 debugueira = "debugueira:main"
