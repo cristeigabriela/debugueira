@@ -110,23 +110,29 @@ class Daemon:
             rec.meta.update(ended=time.time(), end_reason="daemon died")
             (rec.dir / "meta.json").write_text(json.dumps(rec.meta, indent=2), encoding="utf-8")
 
-    def owns_daemon_file(self) -> bool:
-        """Whether `daemon.json` still exists and names this process.
+    def lost_daemon_file(self) -> bool:
+        """True when `daemon.json` is gone or names another process, so no client can find us anymore.
 
-        It stops naming us when the home is deleted out from under a live daemon (a reset, or `rm -rf`).
-        We then hold the pipe forever and every new daemon fails to bind it, so instead we exit.
+        That happens when the home is deleted out from under a live daemon (a reset, or `rm -rf`): we'd
+        hold the pipe forever, and every new daemon would fail to bind it. Only a missing file or another
+        pid counts; a read that merely fails (a scanner holding the file a moment) is no reason to exit.
         """
         try:
-            return json.loads(config.daemon_file().read_text(encoding="utf-8")).get("pid") == os.getpid()
+            return json.loads(config.daemon_file().read_text(encoding="utf-8")).get("pid") != os.getpid()
+        except FileNotFoundError:
+            return True
         except (OSError, ValueError):
             return False
 
     def reaper(self) -> None:
+        misses = 0
         while not self.stopping:
             time.sleep(2)
             if self.stopping:
                 return  # a `daemon stop` is already tearing down; don't race it
-            if not self.owns_daemon_file():
+            # Two ticks in a row, so one odd moment can't end live sessions.
+            misses = misses + 1 if self.lost_daemon_file() else 0
+            if misses >= 2:
                 self.shutdown("daemon.json gone (home removed); releasing the pipe")
             for name, session in list(self.sessions.items()):
                 if session.ended:

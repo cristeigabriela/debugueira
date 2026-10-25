@@ -58,14 +58,34 @@ def connect(start: bool = True):
             raise DaemonUnavailableError(str(first)) from first
     spawn_daemon()
     deadline = time.monotonic() + 20
+    respawn_at = time.monotonic() + 3
     last: Exception | None = None
     while time.monotonic() < deadline:
         try:
             return _connect()
         except (OSError, ValueError, KeyError, json.JSONDecodeError) as e:
             last = e
+            if time.monotonic() >= respawn_at:
+                # The one we started may have found the pipe still held by an old daemon whose home was
+                # just removed; that one lets go within seconds, so try again rather than wait it out.
+                spawn_daemon()
+                respawn_at = time.monotonic() + 3
             time.sleep(0.1)
+    if _pipe_held_by_old_daemon():
+        raise DaemonUnavailableError(
+            "another daemon still holds this home's pipe but left no daemon.json (was the home deleted while "
+            f"it ran?); it exits within seconds of noticing, so retry. See {config.daemon_log()}"
+        )
     raise DaemonUnavailableError(f"it didn't come up within 20 s ({last}); see {config.daemon_log()}")
+
+
+def _pipe_held_by_old_daemon() -> bool:
+    """Whether the last daemon we started gave up because an earlier one holds the pipe."""
+    try:
+        lines = config.daemon_log().read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    return bool(lines) and "another daemon holds the pipe" in lines[-1]
 
 
 def request(op: str, start: bool = True, **args) -> dict:

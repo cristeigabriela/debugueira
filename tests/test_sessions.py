@@ -1,7 +1,9 @@
 """Integration tests: real cdb, real targets, the real CLI and daemon."""
 
+import ctypes
 import json
 import threading
+import time
 
 from conftest import requires_cdb
 
@@ -141,6 +143,39 @@ def test_a_daemon_whose_home_was_removed_exits_so_a_fresh_one_can_start(dbg):
         lambda: winapi.creation_time(pid) is None, 15, "the daemon to notice its home vanished and exit"
     )
     assert "no live sessions" in dbg.ok("list"), "a new command brings up a clean daemon, not a wedge"
+
+
+def test_a_command_right_after_the_home_is_removed_still_gets_a_daemon(dbg):
+    """No waiting: the first replacement daemon finds the pipe still held and gives up, so the client
+    must keep trying until the old daemon lets go."""
+    dbg.ok("list")
+    old = dbg.daemon_pid()
+    (dbg.home / "daemon.json").unlink()
+    assert "no live sessions" in dbg.ok("list", timeout=60), "the client respawns once the pipe is free"
+    assert dbg.daemon_pid() != old, "a new daemon answered, not the old one"
+
+
+def test_a_daemon_survives_a_moment_when_its_daemon_json_cant_be_read(dbg, targets):
+    """Only a missing daemon.json means the home is gone. A file someone holds open without sharing (a
+    scanner, an indexer) must not make the daemon end live sessions."""
+    dbg.ok("start", "--name", "h", "--", str(targets["hello"]))
+    pid = dbg.daemon_pid()
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = ctypes.c_void_p
+    generic_read, no_sharing, open_existing = 0x80000000, 0, 3
+    handle = kernel32.CreateFileW(
+        str(dbg.home / "daemon.json"), generic_read, no_sharing, None, open_existing, 0, None
+    )
+    assert handle not in (None, ctypes.c_void_p(-1).value), "the test must hold daemon.json exclusively"
+    try:
+        # Past several reaper ticks while every read of daemon.json fails.
+        deadline = time.monotonic() + 7
+        while time.monotonic() < deadline:
+            assert winapi.creation_time(pid) is not None, "a failed read is no reason to exit"
+            time.sleep(0.5)
+    finally:
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
+    assert "· cmd #1]" in dbg.ok("cmd", "h", "r rip"), "the session lived through it"
 
 
 def test_a_finished_session_stays_readable_with_log_grep_and_query(dbg, targets):
