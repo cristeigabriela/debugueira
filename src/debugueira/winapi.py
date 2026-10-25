@@ -17,6 +17,7 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 PROCESS_ALL_ACCESS = 0x1FFFFF
 SYNCHRONIZE = 0x00100000
 
+DEBUG_ONLY_THIS_PROCESS = 0x00000002
 CREATE_SUSPENDED = 0x00000004
 DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -104,8 +105,21 @@ kernel32.QueryFullProcessImageNameW.argtypes = [
     ctypes.POINTER(wintypes.DWORD),
 ]
 ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+kernel32.DebugActiveProcessStop.argtypes = [wintypes.DWORD]
+kernel32.DebugSetProcessKillOnExit.argtypes = [wintypes.BOOL]
 
 STILL_ACTIVE = 259
+
+
+def stop_debugging(pid: int) -> None:
+    """Detach the debug port a `DEBUG_ONLY_THIS_PROCESS` create left on `pid`, leaving it running.
+
+    We create the target under a debug flag only to skip its IFEO redirect (the way cdb and WinDbg do),
+    then hand it to cdb. `DebugSetProcessKillOnExit(False)` first, so the target survives the gap between
+    this detach and cdb's attach even if the daemon dies in it.
+    """
+    kernel32.DebugSetProcessKillOnExit(False)
+    _check(kernel32.DebugActiveProcessStop(pid), "DebugActiveProcessStop")
 
 
 def _check(ok, what: str):

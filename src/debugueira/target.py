@@ -5,6 +5,12 @@ job around cdb, so a kill-on-close job can't clean up the tree. And the target s
 its reads swallow debugger commands. So debugueira creates the target suspended, with no window and
 pipes of its own, puts it in the session's job, and cdb attaches with `-pb -pr`, which resumes it and
 stops once at the loader breakpoint.
+
+The create carries `DEBUG_ONLY_THIS_PROCESS` so the loader skips the target's IFEO entry, exactly as cdb
+and WinDbg do when they launch an exe. Without it, a plain create of e.g. `C:\\Windows\\System32\\
+notepad.exe` is redirected by IFEO's `AppExecutionAliasRedirect` to the packaged Store app, so we would
+debug a different binary than the one asked for (verified 2026-10-25). We detach that debug port at once
+and let cdb be the real debugger.
 """
 
 import codecs
@@ -29,13 +35,17 @@ class Target:
                 cwd=cwd,
                 env=env,
                 bufsize=0,
-                creationflags=winapi.CREATE_SUSPENDED | winapi.CREATE_NO_WINDOW,
+                creationflags=(
+                    winapi.DEBUG_ONLY_THIS_PROCESS | winapi.CREATE_SUSPENDED | winapi.CREATE_NO_WINDOW
+                ),
             )
         except OSError as e:
             raise UsageError(f"can't launch {argv[0]}: {e.strerror or e}") from e
+        self.pid = self.proc.pid
+        # Drop our debug port so cdb can attach; the image is already chosen, so the IFEO skip sticks.
+        winapi.stop_debugging(self.pid)
         # In the job before it runs a single instruction, so every process it starts is in it too.
         winapi.assign_to_job(job, winapi.popen_handle(self.proc))
-        self.pid = self.proc.pid
         self._on_output = on_output
         threading.Thread(target=self._pump, name=f"target-{self.pid}", daemon=True).start()
 

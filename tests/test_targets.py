@@ -2,13 +2,31 @@
 
 import ctypes
 import re
+import winreg
 from ctypes import wintypes
 
+import pytest
 from conftest import finish_spawner as _finish_spawner
 from conftest import requires_cdb
 from conftest import run_until as _run_until
 
+from debugueira import winapi
+
 pytestmark = requires_cdb
+
+
+def _ifeo_redirects_notepad() -> bool:
+    """True when this machine's IFEO redirects System32\\notepad.exe to the packaged Store app.
+
+    That's the condition the fix is about: a plain launch would be redirected, a debugger launch isn't.
+    Absent (older Windows, CI images), there's nothing to bypass, so the test skips.
+    """
+    key = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe\0"
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key) as k:
+            return winreg.QueryValueEx(k, "AppExecutionAliasRedirect")[0] == 1
+    except OSError:
+        return False
 
 
 def test_a_crash_in_a_child_stops_the_session_inside_that_child(dbg, targets):
@@ -138,6 +156,22 @@ def _console_windows() -> set[int]:
 
     user32.EnumWindows(WNDENUMPROC(visit), 0)
     return found
+
+
+@pytest.mark.skipif(not _ifeo_redirects_notepad(), reason="no IFEO redirect on notepad here")
+def test_launching_an_ifeo_redirected_exe_debugs_the_real_binary(dbg):
+    """We create the target under a debug flag, so the loader skips IFEO like cdb and WinDbg do.
+
+    Without it, launching System32\\notepad.exe is redirected to the packaged Store app, and we'd debug a
+    different binary (with no symbols) than the path asked for.
+    """
+    dbg.ok("start", "--name", "np", "--children", "none", "--", r"C:\Windows\System32\notepad.exe")
+    pid = next(m for m in dbg.metas() if m["name"] == "np")["target_pid"]
+    image = winapi.image_path(pid) or ""
+    assert image.lower().endswith(r"\system32\notepad.exe"), (
+        f"IFEO must be bypassed: expected the on-disk System32 exe, got {image!r}"
+    )
+    dbg.ok("stop", "np")
 
 
 def test_no_console_window_ever_appears(dbg, targets):
