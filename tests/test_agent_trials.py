@@ -253,7 +253,11 @@ def test_a_target_frozen_by_a_killed_daemon_recovers_with_the_skills_recipe(dbg,
     dbg.ok("attach", "--name", "a", "--pid", str(pid))
     dbg.ok("cmd", "a", "bp ntdll!NtDelayExecution")
     assert "· breakpoint 0 ·" in dbg.ok("cmd", "a", "g", "--timeout", "10")
-    winapi.terminate(dbg.daemon_pid())
+    daemon = dbg.daemon_pid()
+    winapi.terminate(daemon)
+    # Wait for the old daemon to actually exit, so the peek spawns a clean one instead of racing the
+    # dying daemon for the pipe.
+    dbg.wait_until(lambda: winapi.creation_time(daemon) is None, 10, "the killed daemon to exit")
     threads = dbg.ok("peek", "--pid", str(pid), "~")
     assert "Suspend: 2" in threads, (
         f"cdb died stopped, so its suspension stays on top of the peek's:\n{threads}"
