@@ -1,3 +1,7 @@
+<p align="center">
+  <img alt="debugueira's logo: a terminal window and a notepad window, overlapped" src="docs/images/logo.png" width="160">
+</p>
+
 # debugueira
 
 A WinDbg session manager for agents. **Many live cdb sessions at once, raw WinDbg commands in, WinDbg's own output out, and every line logged** so an agent can search it instead of reading it all.

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e5dbff"/>
+      <stop offset="1" stop-color="#bfe3ff"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="22" stdDeviation="22" flood-color="#2b2160" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <!-- tile -->
+  <rect x="0" y="0" width="1024" height="1024" rx="220" fill="url(#bg)"/>
+
+  <!-- back window: the terminal -->
+  <g transform="rotate(-7 400 400)" filter="url(#shadow)">
+    <rect x="130" y="170" width="560" height="470" rx="64" fill="#1b1d2a" stroke="#14152a" stroke-width="16"/>
+    <path d="M130 234 a64 64 0 0 1 64 -64 h432 a64 64 0 0 1 64 64 v34 h-560 z" fill="#2c3150"/>
+    <line x1="130" y1="268" x2="690" y2="268" stroke="#14152a" stroke-width="12"/>
+    <circle cx="200" cy="220" r="17" fill="#74c0fc"/>
+    <circle cx="252" cy="220" r="17" fill="#b197fc"/>
+    <circle cx="304" cy="220" r="17" fill="#ffd43b"/>
+    <!-- breakpoint dot in the gutter, then the prompt -->
+    <circle cx="196" cy="424" r="22" fill="#4dabf7" stroke="#d0ebff" stroke-width="6"/>
+    <path d="M246 372 l78 54 l-78 54" fill="none" stroke="#b197fc" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="348" y1="484" x2="414" y2="484" stroke="#74c0fc" stroke-width="30" stroke-linecap="round"/>
+  </g>
+
+  <!-- front window: notepad, in Comic Sans, chibi -->
+  <g transform="translate(26 14) rotate(6 640 640)" filter="url(#shadow)">
+    <rect x="370" y="410" width="540" height="480" rx="64" fill="#ffffff" stroke="#14152a" stroke-width="16"/>
+    <path d="M370 474 a64 64 0 0 1 64 -64 h412 a64 64 0 0 1 64 64 v32 h-540 z" fill="#a5d8ff"/>
+    <line x1="370" y1="506" x2="910" y2="506" stroke="#14152a" stroke-width="12"/>
+    <rect x="420" y="446" width="34" height="26" rx="7" fill="#ffffff" stroke="#14152a" stroke-width="7"/>
+    <line x1="806" y1="459" x2="840" y2="459" stroke="#14152a" stroke-width="9" stroke-linecap="round"/>
+    <path d="M858 446 l26 26 M884 446 l-26 26" stroke="#14152a" stroke-width="9" stroke-linecap="round"/>
+    <!-- the Comic Sans -->
+    <text x="420" y="618" font-family="'Comic Sans MS', 'Comic Neue', cursive" font-weight="700" font-size="96" fill="#1971c2">Aa</text>
+    <line x1="568" y1="548" x2="568" y2="628" stroke="#1971c2" stroke-width="9" stroke-linecap="round"/>
+    <!-- face -->
+    <ellipse cx="575" cy="732" rx="26" ry="34" fill="#14152a"/>
+    <ellipse cx="745" cy="732" rx="26" ry="34" fill="#14152a"/>
+    <circle cx="584" cy="718" r="10" fill="#ffffff"/>
+    <circle cx="754" cy="718" r="10" fill="#ffffff"/>
+    <ellipse cx="520" cy="790" rx="34" ry="18" fill="#fcc2d7"/>
+    <ellipse cx="800" cy="790" rx="34" ry="18" fill="#fcc2d7"/>
+    <path d="M630 784 q15 20 30 0 q15 20 30 0" fill="none" stroke="#14152a" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
