@@ -25,6 +25,14 @@ An agent driving a debugger through one-shot shell calls loses the session betwe
 
 It's a CLI, not an MCP server: the agent already knows WinDbg, so it types WinDbg.
 
+Here, an agent was asked to make system32 Notepad use Comic Sans. It set a breakpoint on `gdi32!CreateFontIndirectW` that rewrites the edit font's face name, and let Notepad run:
+
+<p align="center">
+  <img alt="A terminal with the three debugueira commands and their output, and in front of it Notepad, its text in Comic Sans" src="docs/images/showcase.png" width="640">
+</p>
+
+> The Notepad window is a real capture. The terminal is drawn, with the commands and output exactly as they ran.
+
 ## Install
 
 1. **WinDbg** (for its `cdb`): `winget install Microsoft.WinDbg`. The Windows SDK debuggers work too.
