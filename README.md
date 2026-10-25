@@ -70,6 +70,16 @@ struct ctx * c = 0x00000000`00000000
 [c · ended · target killed (pid 22324)]
 ```
 
+## Into a child: `cmd /c whoami`
+
+One session follows `cmd` into the `whoami.exe` it starts. `--break-on-child` stops the child before it runs, so breakpoints go in first. They catch `whoami` turning your SID into a name with `LookupAccountSidW`, then writing that name out:
+
+<p align="center">
+  <img alt="A terminal with the debugueira commands that follow cmd into whoami, and in front of it debugueira watch showing both processes and the output venus\gabriela" src="docs/images/showcase-whoami.png" width="640">
+</p>
+
+> The `watch` window is a real render. The terminal is drawn, with the commands and output as they ran, except for two things: the SID's middle is elided, and `--env "PATH=C:\Windows\System32;C:\Windows"` is left out. That flag made cmd find Windows' `whoami` before Git Bash's own, which the first run caught: it loaded at a Cygwin image base and printed Cygwin's startup handshake.
+
 ## What it does
 
 | Area | Commands |
