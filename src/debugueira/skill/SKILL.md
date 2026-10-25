@@ -10,13 +10,15 @@ debugueira keeps cdb sessions alive in the background. You send **WinDbg command
 ## Quickstart
 
 ```
-debugueira start --name app -- C:\path\app.exe arg1   # launch; stops at the loader breakpoint
+debugueira start --name app -- "C:\path\app.exe" arg1 # launch; stops at the loader breakpoint
 debugueira cmd app "lm m app*"                         # the module name for breakpoints (native: the exe's name)
 debugueira cmd app "bp app!parse_header"               # any WinDbg command line
 debugueira cmd app g                                   # runs to the next stop (or --timeout, default 60 s)
 debugueira cmd app "k; r rcx, rdx"                     # where it stopped; at a function's entry, args are in registers
 debugueira stop app                                    # always stop when done
 ```
+
+**Quote Windows paths** in shell commands: Git Bash drops the backslashes of an unquoted `C:\path`.
 
 **Sessions are shared by everything running as your user**, other agents included. Always pass `--name` with a name of your own (a common prefix helps: `history --name myprefix`); `list` may show sessions that aren't yours, so leave those alone.
 
@@ -35,10 +37,11 @@ Every reply ends in a state line, like `[app · stopped at 0:000> · breakpoint 
 | `break N` | Break into a running target. |
 | `input N "text"` | Send a line to a launched target's stdin (works while it runs). |
 | `new N` | Output printed since your last reply, e.g. the target's output while it ran. |
+| `output N [--stream stdout\|stderr] [-f]` | Only the launched program's own stdout and stderr, without cdb's text; live or finished. Attached processes and dumps have none. |
 | `procs N` | Every process the session debugs: number, pid, state or exit code, command line. |
 | `stop N... [--kill \| --detach]` | End sessions. Default: kill a launched target (with its children), detach from an attached one. A launched target can't be detached: it lives in its session. |
 | `list` / `status N` | Live sessions / one session as JSON. |
-| `events [--session N] [--since 10m] [-n N]` | What happened across all sessions: each one starting and ending, each process starting, exiting or crashing. Handy after a session ends to see why. |
+| `events [--session N] [--since 10m] [-n N]` | What happened across all sessions: each one starting and ending, each process starting, exiting or crashing. Handy after a session ends to see why. One crash shows as each chance it was seen at; `--json` has exact times. |
 | `log N [--cmd K] [--tail L]` | Read the log: one command's full output, or the end. |
 | `grep N REGEX [-C 2] [--cmd K]` | Search the raw log; hits print as `#cmd:line: text`. |
 | `query N 'python'` | Run Python over the session; only what it prints comes back (below). |
@@ -68,6 +71,7 @@ debugueira query app "print(s.cmd('!peb').grep('CommandLine'))"
 | `s.last` | The previous command's output, as `Out`. |
 | `s.log` | The whole transcript; reads like `Out` (`s.log.grep(...)`). Also `s.log.output(K)` for command #K. |
 | `s.meta` | The session's record: target, start and end, end reason, note. |
+| `s.output`, `s.stdout`, `s.stderr` | What the launched program printed (both streams, or one), as `Out`. |
 | `Out` | A `str` with `.lines`, `.grep(rx)`, `.between(start_rx, end_rx)` and `.cols()` (rows split on whitespace). |
 | `hexint(text)` | `00007ff6\`12345678` or `0x1f` to an int. |
 
@@ -88,9 +92,18 @@ What a snippet prints is trimmed like any reply (`--full` to keep it all), and o
 ## A program that reads stdin
 
 1. `start --name app -- app.exe`, then `cmd app g --timeout 3`: it comes back `running` while the program waits for input.
-2. `input app "a line"`: the reply includes what the program printed in the next second (`--wait SECONDS` for longer); later output comes with `new app`. If the line makes it stop (say, at a breakpoint), the reply names the stop.
+2. `input app "a line"`: the reply includes what the program printed in the next second (`--wait SECONDS` for longer); later output comes with `new app`, and `output app` has everything it printed, without cdb's text. If the line makes it stop (say, at a breakpoint), the reply names the stop.
 3. `break app`, then `~*k`: thread 0 shows where it's blocked (e.g. `fgets` → `ReadFile`).
 4. `g --timeout 3`, more `input`, and finally the program's own quit command (or `stop`).
+
+**Output that arrives late** is usually the program's own buffering: writing to a pipe, the C runtime and Python hold stdout until a buffer fills or the program exits. Python takes `--env PYTHONUNBUFFERED=1`. Child processes write into the same two streams as the target.
+
+## Breakpoints
+
+- **Name the module the way the debugger does.** `lm m <pattern>` shows it. An injected or renamed DLL loads under another name, and a breakpoint on a name that doesn't exist only goes deferred and never hits. Resolve with `x <module>!*name*`, and check `bl` shows the breakpoint bound before you `g`.
+- **In generic or inlined code, break on functions, not source lines.** A line that maps to several addresses fails with `Ambiguous symbol error`. Use `bp mod!crate::module::function`, or `bm mod!crate::module::do_*` for a family.
+- **On a hot path** (a hook that runs for every call), break past the filter that picks your case, add a condition, or use `bp /1`. Otherwise every stop is an unrelated hit.
+- **When another process waits on this one** (a proxy, a handshake with a timeout), don't hold a stop for long. Set the breakpoints and `g` in one `cmd`. Load a big PDB before the timed part (any `x mod!*` does it), or break by address: an address holds only for that exact image.
 
 ## Attaching
 
@@ -110,7 +123,7 @@ Launched and attached targets follow their child processes by default (`--childr
 - **Each child's start is shown inline,** as `[debugueira: child 4 (pid 0x3ef4) started: "worker.exe" 3]`. Its exit is logged as `Last event: 3ef4.2a10: Exit process 4:3ef4, code b`.
 - **`--children none`:** debug only the target. **`--children "worker*.exe,node.exe"`:** follow only matching images; the rest are detached, and the reply says so.
 - **`--break-on-child`:** stop when a followed child starts, so you can set breakpoints in it first.
-- **A crash in a child stops the whole session, inside that child,** and the state line names it. After a second-chance exception, `g` re-runs the faulting instruction. To let the rest continue:
+- **A crash in a child stops the whole session, inside that child,** and the state line names it. It stops at the first chance first; `g` once takes it to the second chance. After a second-chance exception, `g` re-runs the faulting instruction. To let the rest continue, from the second chance:
   - **`gn`** lets the crash end that process, as it would outside a debugger: its parent sees the crash's own exit code (`0xC0000005`). Use it when the program reacts to its children's exit codes.
   - **`.kill`, then `g`,** ends the process too, but with `.kill`'s exit code. `procs` shows `exit 0x80004005 (killed after c0000005)`, and the parent sees `0x80004005`.
 - **When the last process exits,** the state line says `all processes exited` with the target's exit code, and every later one says it too. A further `g` prints cdb's `No runnable debuggees` error, which is normal. The session stays open for `log`, `grep` and `procs` until you `stop` it.
@@ -142,11 +155,12 @@ SOS loads by itself when the runtime loads. A .NET app's `.exe` shows up as `app
 
 - **Always `stop` when you're done.** An idle session ends by itself after 30 minutes (`--idle MIN` changes it). Launched targets are killed and attached ones detached.
 - **Before leaving an attached target running for a while, run `bc *`.** If debugueira itself is killed mid-session, cdb dies without detaching: an attached target that sat stopped stays frozen, and one that ran with breakpoints can keep a stray `int 3`. A clean `stop` (or the idle limit) never does this. To repair it, see "A frozen attached target" below.
-- **The daemon starts on the first command and exits when idle.** You never manage it.
+- **The daemon starts on the first command and exits when idle.** You never manage it. `daemon stop` ends it and its sessions, but the next command of any kind starts a new one.
 
 ## When something's off
 
-- **No symbols:** PDBs next to the exe load automatically. Otherwise use `--sym C:\pdbs` (repeatable), then `.reload /f` and `lm`.
+- **No symbols:** PDBs next to the exe load automatically. Otherwise use `--sym C:\pdbs` (repeatable), then `.reload /f` and `lm`. `lmv m mod` says whether a PDB loaded and matches. A frame like `mod!SomeExport+0x16e1` from a module with no PDB names only the nearest export, not the real function. The first load of a big PDB (hundreds of MB) is slow: give that command `--timeout 300`.
+- **Which file is running:** `lm` shows a launched target's name only. `!peb` (`ImageFile`) or `|.` has its full path on disk.
 - **"no session named":** `debugueira list`, or `debugueira history` for finished ones.
 - **Setup problems:** `debugueira doctor`.
 - **A frozen attached target** (history says `daemon died`, and it makes no progress): attach again and run `~`. Under a session, a healthy thread reads `Suspend: 1`. Resume each thread that reads more with `~Nm` (`~*m` for all), until each reads 1. Then `!chkimg -f MODULE` restores any stray `int 3` in that module: run it for each module that had breakpoints, usually the program's own (`!chkimg -f app`). Then `g`: if it stops at a leftover break exception, that's the event cdb died on. Then `stop`.
