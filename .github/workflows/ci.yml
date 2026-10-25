@@ -34,4 +34,14 @@ jobs:
         run: uv run python tests/targets/build.py
 
       - name: Test
-        run: uv run pytest -v --durations=10
+        run: uv run pytest -v --durations=10 --basetemp="${{ runner.temp }}/pytest"
+
+      # Each test's debugueira home: every session's full event log and the daemon's log, for a failure
+      # that doesn't reproduce locally.
+      - name: Keep the test homes of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-homes
+          path: ${{ runner.temp }}/pytest
+          retention-days: 14
