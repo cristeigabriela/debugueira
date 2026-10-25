@@ -92,7 +92,9 @@ class StartSpec:
     timeout: float = 120
 
 
-def cdb_argv(spec: StartSpec, cdb_path: str, launched_pid: int = 0, image: str = "") -> list[str]:
+def cdb_argv(
+    spec: StartSpec, cdb_path: str, launched_pid: int = 0, image: str = "", symbol_store: str = "srv*"
+) -> list[str]:
     """cdb's command line. `image` is an attached process's exe, when it could be read."""
     sym = [*spec.sym]
     if spec.env.get("_NT_SYMBOL_PATH"):
@@ -103,7 +105,7 @@ def cdb_argv(spec: StartSpec, cdb_path: str, launched_pid: int = 0, image: str =
     elif spec.mode == "attach" and image:
         # The same for an attached exe; `!chkimg` also finds the exe's own image only here.
         sym.insert(0, ntpath.dirname(image))
-    sym.append("srv*")
+    sym.append(symbol_store)
     argv = [cdb_path, "-lines", "-y", ";".join(sym)]
     if spec.src:
         argv += ["-srcpath", ";".join(spec.src)]
@@ -254,7 +256,9 @@ class Session:
                 )
                 self.procs[root] = Proc(0, root, line)
             image = (winapi.image_path(root) or "") if spec.mode == "attach" and root else ""
-            self.argv = cdb_argv(spec, cdb_path, self.target.pid if self.target else 0, image)
+            self.argv = cdb_argv(
+                spec, cdb_path, self.target.pid if self.target else 0, image, cfg.symbol_store()
+            )
             self.meta = {
                 "id": self.id, "name": name, "mode": spec.mode, "spec": asdict(spec), "argv": self.argv,
                 "cwd": cwd, "started": time.time(), "ended": None, "end_reason": None,

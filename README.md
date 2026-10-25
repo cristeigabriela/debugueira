@@ -89,7 +89,9 @@ Native targets with PDBs and .NET targets (SOS loads on its own) both work. The 
 - **Each session** writes `events.jsonl` (every command, every chunk of output, every event) and `meta.json` under `%LOCALAPPDATA%\debugueira\sessions\`. History is those folders. They're pruned after 90 days or 2 GB.
 - **The daemon** also keeps one journal across all sessions, for people: `debugueira events` reads it, `debugueira watch` shows it live. Colored output appears only at a real terminal, never in an agent's pipe.
 
-Settings live in `%LOCALAPPDATA%\debugueira\config.toml` (all optional): `cdb_path`, `idle_minutes`, `idle_cap_hours`, `daemon_idle_minutes`, `retention_days`, `retention_gb`, `head_lines`, `tail_lines`.
+Settings live in `%LOCALAPPDATA%\debugueira\config.toml` (all optional): `cdb_path`, `idle_minutes`, `idle_cap_hours`, `daemon_idle_minutes`, `retention_days`, `retention_gb`, `head_lines`, `tail_lines`, `symbol_path`.
+
+`symbol_path` is a symbol path added to every session (after its own `--sym` and `_NT_SYMBOL_PATH`); it replaces the built-in Microsoft-server default. Point it at your WinDbg store and any build output so symbols resolve the same in both tools, e.g. `symbol_path = "srv*C:\\symbols*https://msdl.microsoft.com/download/symbols;D:\\build\\pdbs"`. With it unset, debugueira uses the Microsoft server, cached in `C:\symbols` when that folder exists so WinDbg and debugueira share downloads.
 
 ## Compared to mcp-windbg
 

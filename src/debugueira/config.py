@@ -42,6 +42,11 @@ def pipe_address() -> str:
     return rf"\\.\pipe\debugueira-{digest}"
 
 
+MS_SYMBOL_SERVER = "https://msdl.microsoft.com/download/symbols"
+# WinDbg's conventional local symbol cache. Sharing it means a PDB either tool downloads serves both.
+WINDBG_CACHE = r"C:\symbols"
+
+
 @dataclass(frozen=True)
 class Config:
     """Settings from `config.toml`. Every key is optional."""
@@ -61,6 +66,22 @@ class Config:
     #: How many lines a reply keeps from the start and the end of long output.
     head_lines: int = 60
     tail_lines: int = 90
+    #: A symbol path appended to every session, after its own `--sym` and `_NT_SYMBOL_PATH`. A full symsrv
+    #: string; it replaces the built-in Microsoft-server default. Point it at your WinDbg store and any
+    #: build output, e.g. `srv*C:\\symbols*https://msdl.microsoft.com/download/symbols;D:\\build\\pdbs`.
+    symbol_path: str = ""
+
+    def symbol_store(self) -> str:
+        """What to search for symbols after a session's own `--sym` and `_NT_SYMBOL_PATH`.
+
+        `symbol_path` wins when set. Otherwise the Microsoft server, cached in WinDbg's `C:\\symbols` store
+        when it exists (so the two tools share downloads), else the debugger's default cache.
+        """
+        if self.symbol_path:
+            return self.symbol_path
+        if os.path.isdir(WINDBG_CACHE):
+            return rf"srv*{WINDBG_CACHE}*{MS_SYMBOL_SERVER}"
+        return "srv*"
 
 
 def load() -> Config:

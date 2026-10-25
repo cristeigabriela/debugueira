@@ -179,6 +179,28 @@ def test_a_launch_attaches_to_the_suspended_target_and_resumes_it_with_one_stop(
     assert "-pd" not in argv, "a launched target must die with its session"
 
 
+def test_the_symbol_store_replaces_the_default_rather_than_adding_to_it():
+    spec = StartSpec(mode="launch", target=["C:\\a.exe"])
+    argv = cdb_argv(spec, "cdb.exe", launched_pid=7, symbol_store="srv*C:\\symbols*https://x")
+    entries = argv[argv.index("-y") + 1].split(";")
+    assert entries[-1] == "srv*C:\\symbols*https://x", "the configured store is last, after the exe dir"
+    assert "srv*" not in entries, "the bare default store is replaced, not kept alongside"
+
+
+def test_a_configured_symbol_path_wins_over_the_default():
+    assert (
+        config.Config(symbol_path="srv*D:\\sym*https://x;D:\\pdbs").symbol_store()
+        == "srv*D:\\sym*https://x;D:\\pdbs"
+    )
+
+
+def test_symbols_default_to_the_shared_windbg_cache_when_it_exists(monkeypatch):
+    monkeypatch.setattr(config.os.path, "isdir", lambda p: p == config.WINDBG_CACHE)
+    assert config.Config().symbol_store() == f"srv*{config.WINDBG_CACHE}*{config.MS_SYMBOL_SERVER}"
+    monkeypatch.setattr(config.os.path, "isdir", lambda p: False)
+    assert config.Config().symbol_store() == "srv*", "else the debugger's own default cache"
+
+
 def test_children_none_sets_up_no_child_debugging():
     assert setup_commands(StartSpec(mode="launch", target=["a.exe"], children="none")) == []
 

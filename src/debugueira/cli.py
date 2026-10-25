@@ -450,8 +450,9 @@ def _check(tag: str, text: str) -> None:
 
 def cmd_doctor(args) -> int:
     ok = True
+    cfg = config.load()
     try:
-        _check("ok", f"cdb: {find_cdb(config.load().cdb_path)}")
+        _check("ok", f"cdb: {find_cdb(cfg.cdb_path)}")
     except DebugueiraError as e:
         ok = False
         _check("FAIL", str(e))
@@ -463,6 +464,7 @@ def cmd_doctor(args) -> int:
     recs = history.records()
     size = sum(r.size() for r in recs) / (1 << 20)
     _check("ok", f"home: {config.home()} ({len(recs)} sessions, {size:.1f} MB)")
+    _check("ok", f"symbols: {cfg.symbol_store()} (plus each session's --sym and _NT_SYMBOL_PATH)")
     orphans = _orphans()
     _check("WARN" if orphans else "ok", f"leftovers: {len(orphans)} (see `debugueira gc`)")
     try:
