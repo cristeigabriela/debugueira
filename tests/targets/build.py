@@ -83,7 +83,9 @@ class _CTarget:
         return BIN_DIR / f"{self.name}.pdb"
 
 
-C_TARGETS = [_CTarget(name) for name in ("hello", "crash", "loop", "spawner", "worker", "side", "echo")]
+C_TARGETS = [
+    _CTarget(name) for name in ("hello", "crash", "loop", "spawner", "worker", "side", "echo", "streams")
+]
 
 
 def _is_stale(output: Path, sources: list[Path]) -> bool:
@@ -205,7 +207,7 @@ def build_all(*, log: bool = False) -> dict[str, Path]:
     * log - print one line per artifact that was built
 
     # Returns
-    A map from target name (`hello`, `crash`, `loop`, `spawner`, `worker`, `side`, `echo`,
+    A map from target name (`hello`, `crash`, `loop`, `spawner`, `worker`, `side`, `echo`, `streams`,
     `HelloNet`) to its exe. Raises a `TargetBuildError` subclass if any build fails.
     """
     built: dict[str, Path] = {}

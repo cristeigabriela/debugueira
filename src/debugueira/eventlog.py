@@ -35,10 +35,33 @@ class EventLog:
             self._file.close()
 
 
-def read_events(path: Path) -> Iterator[dict]:
-    """Every event in a log. A half-written last line (a write in progress) is skipped."""
+# The program's own output, as logged by `out` events: one stream each.
+TARGET_STREAMS = ("stdout", "stderr")
+# What sessions logged before stdout and stderr had pipes of their own: both, merged.
+MERGED_STREAM = "target"
+
+
+def program_output(events: Iterator[dict], streams: tuple[str, ...] = TARGET_STREAMS) -> list[dict]:
+    """The chunks the program itself printed, without cdb's text, in order: `{t, stream, text}`.
+
+    A session recorded before the split logged both streams as `target`; those chunks count only when both
+    streams are asked for, since they can't be told apart.
+    """
+    wanted = set(streams)
+    if wanted >= set(TARGET_STREAMS):
+        wanted.add(MERGED_STREAM)
+    return [
+        {"t": ev.get("t", 0), "stream": ev["stream"], "text": ev["text"]}
+        for ev in events
+        if ev.get("kind") == "out" and ev.get("stream") in wanted
+    ]
+
+
+def read_events(path: Path, upto: int | None = None) -> Iterator[dict]:
+    """Every event in a log, or those in its first `upto` bytes. A half-written last line is skipped."""
     with open(path, "rb") as f:
-        for raw in f:
+        data = f.read() if upto is None else f.read(upto)
+        for raw in data.splitlines():
             try:
                 yield json.loads(raw)
             except json.JSONDecodeError:

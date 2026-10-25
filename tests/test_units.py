@@ -217,6 +217,21 @@ def test_a_glob_policy_stops_on_each_child_so_it_can_be_detached():
     assert "sxe cpr" in cmds
 
 
+def test_program_output_keeps_streams_apart_and_reads_old_merged_logs():
+    from debugueira.eventlog import program_output
+
+    events = [
+        {"kind": "out", "cmd": 1, "text": "0:000> ", "t": 1},  # cdb's own: never program output
+        {"kind": "out", "cmd": 1, "text": "a\n", "stream": "stdout", "t": 2},
+        {"kind": "out", "cmd": 1, "text": "b\n", "stream": "stderr", "t": 3},
+        {"kind": "out", "cmd": 1, "text": "old\n", "stream": "target", "t": 4},  # logged before the split
+    ]
+    assert [c["text"] for c in program_output(events)] == ["a\n", "b\n", "old\n"]
+    assert [c["text"] for c in program_output(events, ("stderr",))] == ["b\n"], (
+        "a merged old chunk can't be called stderr, so one stream alone leaves it out"
+    )
+
+
 def test_merged_streams_never_split_a_line():
     from debugueira.stream import LineMerger
 

@@ -20,8 +20,8 @@ from pathlib import Path
 from . import __version__, client, config, history, journal, output, query, style, winapi
 from .cdb import find_cdb
 from .errors import DebugueiraError
+from .eventlog import TARGET_STREAMS, program_output, read_events, transcript
 from .eventlog import grep as grep_entries
-from .eventlog import read_events, transcript
 from .session import refusal
 from .tidy import tidy
 
@@ -264,6 +264,70 @@ def cmd_log(args) -> int:
         )
     _print(text)
     return 0
+
+
+def cmd_output(args) -> int:
+    rec = history.resolve(args.ref)
+    if rec.meta.get("mode") != "launch":
+        raise DebugueiraError(
+            f"{rec.id} {'attached to' if rec.meta.get('mode') == 'attach' else 'opened'} its target, so "
+            "debugueira never had its stdout or stderr: only launched targets' output is captured"
+        )
+    streams = (args.stream,) if args.stream else TARGET_STREAMS
+    # Read up to where following starts, so no chunk prints twice or goes missing in between.
+    offset = rec.events.stat().st_size if rec.events.exists() else 0
+    chunks = program_output(read_events(rec.events, upto=offset), streams)
+    if args.json:
+        for c in chunks:
+            _print(json.dumps(c, ensure_ascii=False))
+    else:
+        text = "".join(c["text"] for c in chunks).replace("\r\n", "\n").rstrip("\n")
+        if args.tail:
+            text = "\n".join(text.split("\n")[-args.tail :])
+        if not args.full:
+            cfg = config.load()
+            text = output.trim(text, cfg.head_lines, cfg.tail_lines, "`--tail N` or `--full`")
+        if text:
+            _print(text)
+        elif not args.follow:
+            _print(f"the program has printed nothing{' to ' + args.stream if args.stream else ''} yet")
+    if args.follow and rec.live:
+        sys.stdout.flush()
+        try:
+            _follow_output(rec.events, offset, streams, args.json)
+        except KeyboardInterrupt:
+            pass
+    return 0
+
+
+def _follow_output(path: Path, offset: int, streams: tuple[str, ...], as_json: bool) -> None:
+    """Print the program's new output as it lands, until its session ends."""
+    partial = b""
+    while True:
+        size = path.stat().st_size if path.exists() else 0
+        if size > offset:
+            with open(path, "rb") as f:
+                f.seek(offset)
+                data = f.read(size - offset)
+            offset = size
+            *lines, partial = (partial + data).split(b"\n")
+            events = [e for e in map(_parse_event, lines) if e]
+            for c in program_output(events, streams):
+                sys.stdout.write(json.dumps(c, ensure_ascii=False) + "\n" if as_json else c["text"])
+            sys.stdout.flush()
+            if any(
+                e.get("kind") == "event" and str(e.get("text", "")).startswith("session ended")
+                for e in events
+            ):
+                return
+        time.sleep(0.25)
+
+
+def _parse_event(raw: bytes) -> dict | None:
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None  # a line still being written
 
 
 def cmd_grep(args) -> int:
@@ -879,6 +943,25 @@ def build_parser() -> argparse.ArgumentParser:
     g = output_group(p, json_=False)
     g.add_argument(
         "--raw", action="store_true", help="exactly as cdb printed it: no folding, no noise filter"
+    )
+
+    p = add(
+        "Read a session",
+        "output",
+        cmd_output,
+        "The program's own stdout and stderr",
+        "%(prog)s REF [--stream stdout|stderr] [-f] [options]",
+        "What the launched program itself printed, without any of cdb's text. REF is a live name, or a "
+        "finished session's name or id from `history`. Attached targets and dumps have none.",
+        "Examples:\n  debugueira output app\n  debugueira output app --stream stderr -f",
+    )
+    args_group(p).add_argument("ref", metavar="REF", help="a session name or history id")
+    g = p.add_argument_group("Which part")
+    g.add_argument("--stream", choices=TARGET_STREAMS, help="only stdout or only stderr (default both)")
+    g.add_argument("--tail", type=lambda v: int(positive(v)), metavar="N", help="only the last N lines")
+    g = output_group(p)
+    g.add_argument(
+        "-f", "--follow", action="store_true", help="keep printing new output until the session ends"
     )
 
     p = add(

@@ -30,7 +30,7 @@ from pathlib import Path
 from . import config, journal, minidump, winapi
 from .cdb import Cdb, find_cdb
 from .errors import BreakFailedError, InputUnavailableError, SessionEndedError, TargetRunningError, UsageError
-from .eventlog import EventLog
+from .eventlog import TARGET_STREAMS, EventLog
 from .target import Target
 from .tidy import exceptions, stop_reason, tidy
 
@@ -298,17 +298,17 @@ class Session:
         if source == "note":
             return  # already logged as an event by whoever wrote it
         self.log.write(
-            "out", cmd=self._log_cmd, text=text, **({"stream": "target"} if source == "target" else {})
+            "out", cmd=self._log_cmd, text=text, **({"stream": source} if source in TARGET_STREAMS else {})
         )
         if source == "cdb":
             self._scan(text)
 
-    def _on_target_output(self, text: str) -> None:
+    def _on_target_output(self, text: str, stream: str) -> None:
         cdb = getattr(self, "cdb", None)
         if cdb:
-            cdb.inject(text, "target")
+            cdb.inject(text, stream)
         else:
-            self.log.write("out", cmd=self._log_cmd, text=text, stream="target")
+            self.log.write("out", cmd=self._log_cmd, text=text, stream=stream)
 
     def _scan(self, text: str) -> None:
         """Track child processes from cdb's `Last event:` lines, one complete line at a time."""

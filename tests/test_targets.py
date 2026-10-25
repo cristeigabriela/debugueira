@@ -109,6 +109,37 @@ def test_input_reaches_a_launched_targets_stdin_while_it_runs(dbg, targets):
     assert "echo: hello there" in dbg.ok("grep", "e", "echo:"), "and it's in the log"
 
 
+def test_output_returns_only_the_programs_own_text(dbg, targets):
+    dbg.ok("start", "--name", "s", "--", str(targets["streams"]))
+    _run_until(dbg, "s", "all processes exited")
+    out = dbg.ok("output", "s")
+    assert "out: first" in out and "err: oops" in out and "out: second" in out, out
+    assert "ntdll" not in out and "0:000>" not in out and "module loads" not in out, f"no cdb text:\n{out}"
+
+
+def test_output_keeps_stdout_and_stderr_apart(dbg, targets):
+    dbg.ok("start", "--name", "s", "--", str(targets["streams"]))
+    _run_until(dbg, "s", "all processes exited")
+    stdout, stderr = dbg.ok("output", "s", "--stream", "stdout"), dbg.ok("output", "s", "--stream", "stderr")
+    assert "out: first" in stdout and "err: oops" not in stdout, stdout
+    assert stderr.strip() == "err: oops", stderr
+    assert dbg.ok("query", "s", "print(s.stderr.strip())").strip() == "err: oops", "query sees the split too"
+
+
+def test_output_stays_readable_after_the_session_ends(dbg, targets):
+    dbg.ok("start", "--name", "s", "--", str(targets["streams"]))
+    _run_until(dbg, "s", "all processes exited")
+    dbg.ok("stop", "s")
+    assert "err: oops" in dbg.ok("output", "s")
+
+
+def test_output_says_why_an_attached_target_has_none(dbg, targets, spawn):
+    _, pid = spawn(targets["loop"])
+    dbg.ok("attach", "--name", "a", "--pid", str(pid))
+    r = dbg("output", "a")
+    assert r.code == 1 and "only launched targets" in r.err, str(r)
+
+
 def test_input_is_refused_for_an_attached_target(dbg, targets, spawn):
     _, pid = spawn(targets["loop"])
     dbg.ok("attach", "--name", "a", "--pid", str(pid))

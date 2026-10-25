@@ -15,7 +15,7 @@ import traceback
 
 from . import client, config
 from .errors import DebugueiraError
-from .eventlog import Entry, read_events, transcript
+from .eventlog import TARGET_STREAMS, Entry, program_output, read_events, transcript
 from .history import INTERNAL, Record
 from .output import trim
 
@@ -101,6 +101,23 @@ class SessionProxy:
     def last(self) -> Out:
         entries = [e for e in self.log.entries() if e.cmd > 0 and e.source not in INTERNAL]
         return Out(entries[-1].output if entries else "")
+
+    def _program(self, streams: tuple[str, ...]) -> Out:
+        chunks = program_output(read_events(self.rec.events), streams)
+        return Out("".join(c["text"] for c in chunks).replace("\r\n", "\n"))
+
+    @property
+    def output(self) -> Out:
+        """Everything the launched program printed, stdout and stderr, without cdb's text."""
+        return self._program(TARGET_STREAMS)
+
+    @property
+    def stdout(self) -> Out:
+        return self._program(("stdout",))
+
+    @property
+    def stderr(self) -> Out:
+        return self._program(("stderr",))
 
 
 class _Captured:

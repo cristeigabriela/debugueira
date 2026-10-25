@@ -151,7 +151,13 @@ class Cdb:
             self._emit(pieces)
 
     def _flush(self) -> list[tuple[str, str]]:
-        return self._merger.flush("target") + self._merger.flush("note") + self._merger.flush("cdb")
+        # The target's streams and debugueira's notes first; cdb's own last, so its prompt ends the text.
+        return [
+            *self._merger.flush("stdout"),
+            *self._merger.flush("stderr"),
+            *self._merger.flush("note"),
+            *self._merger.flush("cdb"),
+        ]
 
     def _emit(self, pieces: list[tuple[str, str]]) -> None:
         for text, source in pieces:
@@ -167,8 +173,8 @@ class Cdb:
         if pieces:
             self._cond.notify_all()
 
-    def inject(self, text: str, source: str = "target") -> None:
-        """Add output that didn't come from cdb: the target's own, or a debugueira note."""
+    def inject(self, text: str, source: str) -> None:
+        """Add output that didn't come from cdb: the target's (`stdout`, `stderr`) or a debugueira `note`."""
         self._append(text, source)
 
     def visible(self) -> str:

@@ -23,15 +23,18 @@ from .errors import UsageError
 
 
 class Target:
+    """`on_output(text, stream)` gets the program's own output as it arrives; `stream` is `stdout` or `stderr`."""
+
     def __init__(
-        self, argv: list[str], cwd: str, env: dict[str, str], job: int, on_output: Callable[[str], None]
+        self, argv: list[str], cwd: str, env: dict[str, str], job: int, on_output: Callable[[str, str], None]
     ):
         try:
             self.proc = subprocess.Popen(
                 argv,
                 stdin=subprocess.PIPE,
+                # Separate pipes, so `debugueira output --stream` can tell the two apart.
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,
                 cwd=cwd,
                 env=env,
                 bufsize=0,
@@ -47,21 +50,24 @@ class Target:
         # In the job before it runs a single instruction, so every process it starts is in it too.
         winapi.assign_to_job(job, winapi.popen_handle(self.proc))
         self._on_output = on_output
-        threading.Thread(target=self._pump, name=f"target-{self.pid}", daemon=True).start()
+        for stream, pipe in (("stdout", self.proc.stdout), ("stderr", self.proc.stderr)):
+            threading.Thread(
+                target=self._pump, args=(pipe, stream), name=f"target-{self.pid}-{stream}", daemon=True
+            ).start()
 
-    def _pump(self) -> None:
+    def _pump(self, pipe, stream: str) -> None:
         # Programs print UTF-8 (.NET, modern C runtimes) or the ANSI code page (classic printf); a chunk
         # that isn't valid UTF-8 is read as ANSI instead of turning into replacement characters.
         decoder = codecs.getincrementaldecoder("utf-8")("strict")
         while True:
-            chunk = self.proc.stdout.read(65536)
+            chunk = pipe.read(65536)
             try:
                 text = decoder.decode(chunk, final=not chunk)
             except UnicodeDecodeError:
                 decoder.reset()
                 text = chunk.decode("mbcs", "replace")
             if text:
-                self._on_output(text)
+                self._on_output(text, stream)
             if not chunk:
                 return
 
