@@ -4,10 +4,15 @@ import json
 import subprocess
 import sys
 import time
+from multiprocessing import AuthenticationError
 from multiprocessing.connection import Client
 
 from . import config, winapi
 from .errors import DaemonUnavailableError, DebugueiraError
+
+# Reasons to read daemon.json again and retry. A rejected key is one: a killed daemon leaves its file
+# behind, and its replacement listens on the same pipe a moment before writing its own key there.
+NOT_YET = (OSError, ValueError, KeyError, json.JSONDecodeError, AuthenticationError)
 
 
 class RemoteError(DebugueiraError):
@@ -53,7 +58,7 @@ def spawn_daemon() -> None:
 def connect(start: bool = True):
     try:
         return _connect()
-    except (OSError, ValueError, KeyError, json.JSONDecodeError) as first:
+    except NOT_YET as first:
         if not start:
             raise DaemonUnavailableError(str(first)) from first
     spawn_daemon()
@@ -63,7 +68,7 @@ def connect(start: bool = True):
     while time.monotonic() < deadline:
         try:
             return _connect()
-        except (OSError, ValueError, KeyError, json.JSONDecodeError) as e:
+        except NOT_YET as e:
             last = e
             if time.monotonic() >= respawn_at:
                 # The one we started may have found the pipe still held by an old daemon whose home was

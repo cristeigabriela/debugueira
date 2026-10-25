@@ -178,6 +178,40 @@ def test_a_daemon_survives_a_moment_when_its_daemon_json_cant_be_read(dbg, targe
     assert "· cmd #1]" in dbg.ok("cmd", "h", "r rip"), "the session lived through it"
 
 
+def _daemon_json_with_another_key(dbg) -> str:
+    good = (dbg.home / "daemon.json").read_text(encoding="utf-8")
+    info = json.loads(good)
+    info["key"] = "00" * (len(info["key"]) // 2)
+    (dbg.home / "daemon.json").write_text(json.dumps(info), encoding="utf-8")
+    return good
+
+
+def test_a_command_waits_out_a_daemon_json_that_still_has_the_old_key(dbg):
+    """A replacement daemon listens a moment before it writes its key; a client that read the old daemon's
+    key in between must read again, not crash on the rejected key."""
+    dbg.ok("list")
+    good = _daemon_json_with_another_key(dbg)
+    restore = threading.Timer(1.5, lambda: (dbg.home / "daemon.json").write_text(good, encoding="utf-8"))
+    restore.start()
+    try:
+        r = dbg("list")
+    finally:
+        restore.join()
+    assert r.code == 0, f"the client reads daemon.json again once the key is rejected:\n{r}"
+
+
+def test_a_key_that_never_matches_is_a_clear_error_not_a_traceback(dbg):
+    dbg.ok("list")
+    good = _daemon_json_with_another_key(dbg)
+    try:
+        r = dbg("list")
+    finally:
+        # Put the real key back, so teardown can stop the daemon.
+        (dbg.home / "daemon.json").write_text(good, encoding="utf-8")
+    assert r.code != 0 and "Traceback" not in r.err, f"a typed error, not a crash:\n{r}"
+    assert "digest sent was rejected" in r.err, f"the error says what kept failing:\n{r}"
+
+
 def test_a_finished_session_stays_readable_with_log_grep_and_query(dbg, targets):
     dbg.ok("start", "--name", "h", "--", str(targets["hello"]))
     dbg.ok("cmd", "h", "bp hello!add")
