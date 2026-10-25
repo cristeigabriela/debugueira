@@ -58,6 +58,8 @@ def pyinstaller() -> None:
         str(ROOT / "build" / "pyinstaller"),
         "--specpath",
         str(ROOT / "build"),
+        "--icon",
+        str(ROOT / "packaging" / "debugueira.ico"),
         # Onedir, not onefile: onefile unpacks to temp on every call, and agents call it hundreds of times.
         "--add-data",
         f"{ROOT / 'src' / 'debugueira' / 'skill' / 'SKILL.md'}{os.pathsep}debugueira/skill",

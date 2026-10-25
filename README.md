@@ -110,6 +110,7 @@ uv run python tests/targets/build.py   # small C and .NET targets (needs MSVC an
 uv run pytest
 uv run ruff check && uv run ruff format --check
 uv run python packaging/build.py       # dist/: installer, zip, SHA256SUMS (needs Inno Setup 6)
+uv run packaging/make_icon.py          # after changing docs/images/logo.png: rebuild the exe's icon
 ```
 
 The integration tests drive real cdb against the targets in `tests/targets/`. CI runs everything on `windows-latest`, and a `v*` tag publishes a release.

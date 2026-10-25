@@ -28,6 +28,7 @@ OutputBaseFilename=debugueira-{#AppVersion}-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=debugueira.ico
 UninstallDisplayName=debugueira
 UninstallDisplayIcon={app}\debugueira.exe
 LicenseFile=..\LICENSE
