@@ -254,6 +254,17 @@ def test_a_held_line_is_released_on_flush_and_never_continued():
     assert "".join(t for t, _ in out) == "Enter name: \n0:000> \n", "the flushed line ends before cdb's"
 
 
+def test_the_newline_that_ends_a_flushed_line_belongs_to_no_source():
+    from debugueira.stream import BREAK, LineMerger
+
+    m = LineMerger()
+    m.feed("0:000> ", "cdb")
+    out = m.flush() + m.feed("out: first\n", "stdout")
+    assert out == [("0:000> ", "cdb"), ("\n", BREAK), ("out: first\n", "stdout")], (
+        "the program's own text stays exactly what it printed; the merge's newline is its own piece"
+    )
+
+
 def test_procs_lists_processes_in_the_order_they_started():
     procs = [
         Proc(0, 10, "spawner.exe"),

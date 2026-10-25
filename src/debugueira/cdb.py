@@ -55,7 +55,7 @@ class Cdb:
 
     The target's own output and debugueira's notes join the same stream through `inject`, so a reader
     sees everything in the order it happened. `on_output(text, source)` runs under the stream's lock,
-    with `source` one of `cdb`, `target` or `note`.
+    with `source` one of `cdb`, `stdout`, `stderr`, `note`, or `break` for a newline the merge added.
     """
 
     def __init__(

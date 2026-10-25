@@ -121,7 +121,10 @@ def test_output_keeps_stdout_and_stderr_apart(dbg, targets):
     dbg.ok("start", "--name", "s", "--", str(targets["streams"]))
     _run_until(dbg, "s", "all processes exited")
     stdout, stderr = dbg.ok("output", "s", "--stream", "stdout"), dbg.ok("output", "s", "--stream", "stderr")
-    assert "out: first" in stdout and "err: oops" not in stdout, stdout
+    assert stdout.startswith("out: first"), (
+        f"nothing the program didn't print, not even a newline: {stdout!r}"
+    )
+    assert "err: oops" not in stdout, stdout
     assert stderr.strip() == "err: oops", stderr
     assert dbg.ok("query", "s", "print(s.stderr.strip())").strip() == "err: oops", "query sees the split too"
 
