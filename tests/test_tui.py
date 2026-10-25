@@ -65,3 +65,44 @@ def test_watch_shows_when_the_session_it_is_viewing_ends(dbg, targets):
     dbg.ok("start", "--name", "w", "--", str(targets["hello"]))
     os.environ["DEBUGUEIRA_HOME"] = str(dbg.home)
     asyncio.run(_watch_until_ended(WatchApp(), dbg))
+
+
+def _pane_text(app) -> str:
+    return "\n".join(strip.text for strip in app.screen.query_one("#output RichLog").lines)
+
+
+async def _watch_output(app):
+    from debugueira.watch import SessionScreen
+
+    async with app.run_test(size=(140, 40)) as pilot:
+        assert await _until(pilot, lambda: "err: oops" in _pane_text(app)), "the output pane fills in"
+        text = _pane_text(app)
+        assert "out: first" in text and "out: second" in text, f"every session, both streams:\n{text}"
+        assert "err │ err: oops" in text, f"stderr lines say so in words, not only in color:\n{text}"
+        assert "ModLoad" not in text, "cdb's own text stays in the session's log"
+
+        await pilot.press("s")  # both -> stdout
+        await pilot.press("s")  # stdout -> stderr
+        await pilot.pause(0.1)
+        assert "out: first" not in _pane_text(app) and "err: oops" in _pane_text(app), "s narrows to stderr"
+
+        await pilot.press("z")
+        await pilot.pause(0.1)
+        assert not app.screen.query_one("#sessions").display, "z zooms the output to the whole screen"
+
+        await pilot.press("z", "enter")
+        assert await _until(pilot, lambda: isinstance(app.screen, SessionScreen))
+        assert await _until(pilot, lambda: "err: oops" in _pane_text(app)), (
+            "the session's own view has it too"
+        )
+
+
+def test_watch_shows_the_programs_output_and_narrows_it_to_one_stream(dbg, targets):
+    from conftest import run_until
+
+    from debugueira.watch import WatchApp
+
+    dbg.ok("start", "--name", "s", "--", str(targets["streams"]))
+    run_until(dbg, "s", "all processes exited")  # the session stays live, its output written
+    os.environ["DEBUGUEIRA_HOME"] = str(dbg.home)
+    asyncio.run(_watch_output(WatchApp()))

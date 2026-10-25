@@ -1,7 +1,12 @@
 """`debugueira watch`: a terminal UI over every live session, for people. Agents use `list` and `events`.
 
-Two screens: every live session in a table, with the daemon's journal under it, and one session's own
-view (its state, processes, journal events and live log). Enter opens a session, Esc goes back.
+Two screens: every live session in a table, with the programs' output and the daemon's journal under it,
+and one session's own view (its state, processes, journal events, live log and output). Enter opens a
+session, Esc goes back.
+
+The output pane shows what the launched programs printed, colors included, every session and both streams
+by default. `s` narrows it to stdout or stderr, `o` to one session, and `z` zooms it to the whole screen.
+A target's children write into the same two pipes, so output can't be told apart by process.
 
 It only reads: `list` and `procs` from the daemon, asked passively so that watching never keeps a
 session or the daemon from going idle, plus each session's own `events.jsonl` and the journal, read
@@ -11,6 +16,7 @@ straight from disk.
 import json
 import re
 import time
+from collections import deque
 from pathlib import Path
 from typing import ClassVar
 
@@ -24,14 +30,19 @@ from textual.widgets import DataTable, Footer, Header, RichLog, Static
 
 from . import client, config, journal, style
 from .errors import DebugueiraError
+from .eventlog import MERGED_STREAM, TARGET_STREAMS, program_output
 from .tidy import tidy
 
 POLL = 1.0  # seconds between refreshes
+OUTPUT_LINES = 5000  # kept per output pane, so a new filter can redraw from them
 PROMPT = re.compile(r"(?:\d+:\d+(?::\w+)?|NoTarget|(?:\d+: )?kd)> $")
 # Rich styles for the same meanings the CLI paints: blue is good, and the words say it too.
 STATE_STYLE = {"stopped": "bold blue", "running": "yellow", "ended": "dim"}
 EVENT_STYLE = {event: " ".join(styles) for event, styles in journal.EVENT_STYLES.items()}
 EVENT_WIDTH = max(map(len, journal.EVENTS))
+# Each output line is tagged with its stream in words, so stderr never depends on color alone.
+STREAM_TAG = {"stdout": ("out", "dim"), "stderr": ("err", "bold yellow"), MERGED_STREAM: ("o+e", "dim")}
+STREAM_CHOICES = (TARGET_STREAMS, ("stdout",), ("stderr",))
 
 
 # --- reading -----------------------------------------------------------------------------------
@@ -128,11 +139,45 @@ class LogView:
         return lines
 
 
+class OutputView:
+    """The program's own stdout and stderr from a session's events, as `(stream, line)` pairs.
+
+    Chunks arrive cut anywhere, so each stream holds its unfinished last line until the newline comes. One
+    still unfinished after a quiet second (a prompt waiting for input) shows as it is, and whatever follows
+    starts a new line.
+    """
+
+    def __init__(self, path: Path):
+        self.tail = Tail(path)
+        self.pending: dict[str, str] = {}
+
+    def read(self) -> list[tuple[str, Text]]:
+        lines: list[tuple[str, Text]] = []
+        fed = set()
+        for chunk in program_output(self.tail.read(), TARGET_STREAMS):
+            stream = chunk["stream"]
+            fed.add(stream)
+            *done, rest = (self.pending.pop(stream, "") + chunk["text"].replace("\r\n", "\n")).split("\n")
+            lines += [(stream, program_line(ln)) for ln in done]
+            if rest:
+                self.pending[stream] = rest
+        for stream in [s for s in self.pending if s not in fed]:
+            lines.append((stream, program_line(self.pending.pop(stream))))
+        return lines
+
+
+def program_line(line: str) -> Text:
+    # A terminal shows only what follows the last carriage return (progress bars redraw that way), and
+    # paints the ANSI colors; other escape codes are dropped.
+    return Text.from_ansi(line.rstrip("\r").rsplit("\r", 1)[-1])
+
+
 def _output_line(line: str) -> Text:
     # ModLoad runs don't fold here (they arrive a chunk at a time), so dim them to let them recede.
     if line.startswith("ModLoad: ") or (line.startswith("[") and "module loads:" in line):
         return Text(line, "dim")
-    return Text(line)
+    # The program's own lines run through the log too, escape codes and all.
+    return program_line(line)
 
 
 def journal_line(record: dict, session_width: int = 12) -> Text:
@@ -151,20 +196,97 @@ def idle_left(s: dict) -> str:
     return f"{left // 60}m" if left >= 60 else f"{left}s"
 
 
+# --- widgets -----------------------------------------------------------------------------------
+
+
+class OutputPane(Vertical):
+    """The programs' output, narrowed to one session or stream on request. It keeps the last lines of
+    every session and stream, so changing the filter redraws from them."""
+
+    def __init__(self, session: str | None = None, show_session: bool = True, note: str = "", **kw):
+        super().__init__(**kw)
+        self.lines: deque[tuple[str, str, Text]] = deque(maxlen=OUTPUT_LINES)
+        self.session = session
+        self.streams = TARGET_STREAMS
+        self.show_session = show_session
+        self.note = note  # why there's nothing to show, e.g. an attached session
+
+    def compose(self) -> ComposeResult:
+        yield Static(classes="title")
+        yield RichLog(max_lines=OUTPUT_LINES, wrap=False)
+
+    def on_mount(self) -> None:
+        self.update_title()
+
+    def add(self, session: str, lines: list[tuple[str, Text]]) -> None:
+        log = self.query_one(RichLog)
+        for stream, text in lines:
+            self.lines.append((session, stream, text))
+            if self.wants(session, stream):
+                log.write(self.format_line(session, stream, text))
+
+    def wants(self, session: str, stream: str) -> bool:
+        if self.session is not None and session != self.session:
+            return False
+        # Logs from before the split hold both streams merged, so only "both" can show them.
+        return stream in self.streams or (stream == MERGED_STREAM and self.streams == TARGET_STREAMS)
+
+    def format_line(self, session: str, stream: str, text: Text) -> Text:
+        tag, tag_style = STREAM_TAG.get(stream, (stream, "dim"))
+        parts: list = [(f"{session:<12} ", "bold")] if self.show_session else []
+        return Text.assemble(*parts, (tag, tag_style), (" │ ", "dim"), text)
+
+    def sessions(self) -> list[str]:
+        return list(dict.fromkeys(session for session, _, _ in self.lines))
+
+    def cycle_streams(self) -> None:
+        self.streams = STREAM_CHOICES[(STREAM_CHOICES.index(self.streams) + 1) % len(STREAM_CHOICES)]
+        self.redraw()
+
+    def cycle_session(self, live: list[str]) -> None:
+        names = [None, *dict.fromkeys([*self.sessions(), *live])]
+        self.session = names[(names.index(self.session) + 1) % len(names)] if self.session in names else None
+        self.redraw()
+
+    def redraw(self) -> None:
+        log = self.query_one(RichLog)
+        log.clear()
+        for session, stream, text in self.lines:
+            if self.wants(session, stream):
+                log.write(self.format_line(session, stream, text))
+        self.update_title()
+
+    def update_title(self) -> None:
+        parts = ["Output"]
+        if self.show_session:
+            parts.append(self.session or "all sessions")
+        parts.append(" + ".join(self.streams))
+        if self.note:
+            parts.append(self.note)
+        self.query_one(Static).update(" · ".join(parts))
+
+
 # --- screens -----------------------------------------------------------------------------------
 
 
 class SessionsScreen(Screen):
-    """Every live session, refreshed each second, with the daemon's journal under it."""
+    """Every live session, refreshed each second, with their output and the daemon's journal under it."""
 
-    BINDINGS: ClassVar = [Binding("enter", "open", "Open", show=True), Binding("q", "app.quit", "Quit")]
+    BINDINGS: ClassVar = [
+        Binding("enter", "open", "Open", show=True),
+        Binding("s", "streams", "Streams"),
+        Binding("o", "source", "One session/all"),
+        Binding("z", "zoom", "Zoom output"),
+        Binding("q", "app.quit", "Quit"),
+    ]
     COLUMNS = ("name", "state", "why", "mode", "target", "procs", "cmd", "idle")
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield DataTable(id="sessions", cursor_type="row", zebra_stripes=True)
         yield Static("No live sessions.", id="empty")
-        yield Static("Events", classes="title")
+        yield OutputPane(id="output")
+        yield Static("Events", classes="title", id="journal-title")
         yield RichLog(id="journal", max_lines=1000)
         yield Footer()
 
@@ -173,6 +295,8 @@ class SessionsScreen(Screen):
         for key in self.COLUMNS:
             table.add_column(key.capitalize(), key=key)
         self.rows: dict[str, dict] = {}
+        self.outputs: dict[str, tuple[str, OutputView]] = {}  # by session folder, since names get reused
+        self.zoomed = False
         self.journal = Tail(config.journal_file())
         backlog = self.journal.read()[-200:]
         log = self.query_one("#journal", RichLog)
@@ -185,9 +309,25 @@ class SessionsScreen(Screen):
     def refresh_sessions(self) -> None:
         pid, rows = sessions()
         events = self.journal.read()
-        self.app.call_from_thread(self.show, pid, rows, events)
+        self.app.call_from_thread(self.show, pid, rows, events, self.read_outputs(rows))
 
-    def show(self, pid: int | None, rows: list[dict], events: list[dict]) -> None:
+    def read_outputs(self, rows: list[dict]) -> list[tuple[str, list[tuple[str, Text]]]]:
+        live = {s["dir"]: s["session"] for s in rows if s.get("mode") == "launch" and s.get("dir")}
+        for folder, name in live.items():
+            if folder not in self.outputs:
+                self.outputs[folder] = (name, OutputView(Path(folder) / "events.jsonl"))
+        out = [(name, view.read()) for name, view in self.outputs.values()]
+        for folder in [f for f in self.outputs if f not in live]:
+            del self.outputs[folder]  # ended: its last lines were just read, and stay in the pane
+        return [(name, lines) for name, lines in out if lines]
+
+    def show(
+        self,
+        pid: int | None,
+        rows: list[dict],
+        events: list[dict],
+        outputs: list[tuple[str, list[tuple[str, Text]]]] = (),
+    ) -> None:
         self.app.sub_title = f"daemon pid {pid}" if pid else "daemon not running"
         table = self.query_one("#sessions", DataTable)
         live = {s["session"]: s for s in rows}
@@ -203,10 +343,25 @@ class SessionsScreen(Screen):
             else:
                 table.add_row(*cells, key=name)
             self.rows[name] = s
-        self.query_one("#empty", Static).display = not self.rows
+        self.query_one("#empty", Static).display = not self.rows and not self.zoomed
+        output = self.query_one("#output", OutputPane)
+        for name, lines in outputs:
+            output.add(name, lines)
         log = self.query_one("#journal", RichLog)
         for record in events:
             log.write(journal_line(record))
+
+    def action_streams(self) -> None:
+        self.query_one("#output", OutputPane).cycle_streams()
+
+    def action_source(self) -> None:
+        self.query_one("#output", OutputPane).cycle_session(list(self.rows))
+
+    def action_zoom(self) -> None:
+        self.zoomed = not self.zoomed
+        for selector in ("#sessions", "#journal-title", "#journal"):
+            self.query_one(selector).display = not self.zoomed
+        self.query_one("#empty", Static).display = not self.rows and not self.zoomed
 
     def cells(self, s: dict) -> tuple:
         word = state_word(s)
@@ -235,11 +390,13 @@ class SessionsScreen(Screen):
 
 
 class SessionScreen(Screen):
-    """One session: its state line, processes, journal events and live log."""
+    """One session: its state line, processes, journal events, live log and the program's output."""
 
     BINDINGS: ClassVar = [
         Binding("escape", "app.pop_screen", "Back"),
         Binding("f", "follow", "Follow on/off"),
+        Binding("s", "streams", "Streams"),
+        Binding("z", "zoom", "Zoom output"),
         Binding("q", "app.quit", "Quit"),
     ]
 
@@ -247,12 +404,21 @@ class SessionScreen(Screen):
         super().__init__()
         self.status = status
         self.session_name = status["session"]
+        self.zoomed = False
 
     def compose(self) -> ComposeResult:
+        launched = self.status.get("mode") == "launch"
         yield Header()
         yield Static(id="state")
         with Horizontal():
-            yield RichLog(id="log", max_lines=5000, wrap=False)
+            with Vertical(id="main"):
+                yield RichLog(id="log", max_lines=5000, wrap=False)
+                yield OutputPane(
+                    self.session_name,
+                    show_session=False,
+                    note="" if launched else "only launched targets' output is captured",
+                    id="output",
+                )
             with Vertical(id="side"):
                 yield Static("Processes", classes="title")
                 yield DataTable(id="procs", cursor_type="row", show_cursor=False)
@@ -264,19 +430,29 @@ class SessionScreen(Screen):
         procs = self.query_one("#procs", DataTable)
         for key in ("#", "pid", "state", "command line"):
             procs.add_column(key, key=key)
-        self.log_view = LogView(Path(self.status["dir"]) / "events.jsonl")
+        events_file = Path(self.status["dir"]) / "events.jsonl"
+        self.log_view = LogView(events_file)
+        self.output_view = OutputView(events_file)
         self.journal = Tail(config.journal_file())
         self.ended = ""
         self.query_one("#log", RichLog).focus()
-        self.show(self.status, self.log_view.read(), self.journal.read())
+        self.show(self.status, self.log_view.read(), self.journal.read(), self.output_view.read())
         self.set_interval(POLL, self.refresh_session)
 
     @work(thread=True, exclusive=True, group="refresh")
     def refresh_session(self) -> None:
         status = one(self.session_name) if not self.ended else None
-        self.app.call_from_thread(self.show, status, self.log_view.read(), self.journal.read())
+        self.app.call_from_thread(
+            self.show, status, self.log_view.read(), self.journal.read(), self.output_view.read()
+        )
 
-    def show(self, status: dict | None, lines: list[Text], events: list[dict]) -> None:
+    def show(
+        self,
+        status: dict | None,
+        lines: list[Text],
+        events: list[dict],
+        output: list[tuple[str, Text]] = (),
+    ) -> None:
         if status is None and not self.ended:
             self.ended = _end_reason(Path(self.status["dir"]))
         if status:
@@ -287,6 +463,7 @@ class SessionScreen(Screen):
         log = self.query_one("#log", RichLog)
         for line in lines:
             log.write(line)
+        self.query_one("#output", OutputPane).add(self.session_name, list(output))
         mine = self.query_one("#events", RichLog)
         for record in events:
             if journal.matches(record, self.status["id"]):
@@ -331,6 +508,14 @@ class SessionScreen(Screen):
             log.scroll_end(animate=False)
         self.notify("following the log" if log.auto_scroll else "not following: scroll freely", timeout=2)
 
+    def action_streams(self) -> None:
+        self.query_one("#output", OutputPane).cycle_streams()
+
+    def action_zoom(self) -> None:
+        self.zoomed = not self.zoomed
+        for selector in ("#log", "#side"):
+            self.query_one(selector).display = not self.zoomed
+
 
 def _end_reason(folder: Path) -> str:
     try:
@@ -347,8 +532,11 @@ class WatchApp(App):
     #empty { color: $text-muted; padding: 0 1; }
     .title { background: $boost; text-style: bold; padding: 0 1; }
     #journal { height: 1fr; }
+    #output { height: 1fr; }
+    #output RichLog { height: 1fr; }
     #state { padding: 0 1; height: 1; }
-    #log { width: 2fr; border-right: solid $primary-background; }
+    #main { width: 2fr; border-right: solid $primary-background; }
+    #log { height: 1fr; }
     #side { width: 1fr; }
     #procs { height: auto; max-height: 50%; }
     #events { height: 1fr; }

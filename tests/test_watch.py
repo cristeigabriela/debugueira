@@ -11,7 +11,7 @@ import pytest
 from debugueira import journal, style
 from debugueira.errors import UsageError
 from debugueira.eventlog import EventLog
-from debugueira.watch import LogView, Tail
+from debugueira.watch import LogView, OutputView, Tail
 
 
 @pytest.fixture
@@ -187,6 +187,71 @@ def test_a_debugueira_note_reads_as_its_own_line(tmp_path):
     )
     lines = [line.plain for line in LogView(path).read()]
     assert "[debugueira: child 2 (pid 0x5) started: worker.exe]" in lines
+
+
+# --- the output view --------------------------------------------------------------------------
+
+
+def _output(view: OutputView) -> list[tuple[str, str]]:
+    return [(stream, text.plain) for stream, text in view.read()]
+
+
+def test_the_output_view_joins_lines_cut_across_chunks_and_keeps_the_streams_apart(tmp_path):
+    path = tmp_path / "events.jsonl"
+    _log(
+        path,
+        [
+            ("out", {"cmd": 1, "text": "ModLoad: cdb's own text\n"}),
+            ("out", {"cmd": 1, "stream": "stdout", "text": "hel"}),
+            ("out", {"cmd": 1, "stream": "stderr", "text": "warn: disk\n"}),
+            ("out", {"cmd": 1, "stream": "stdout", "text": "lo\r\nworld\n"}),
+        ],
+    )
+    assert _output(OutputView(path)) == [
+        ("stderr", "warn: disk"),
+        ("stdout", "hello"),
+        ("stdout", "world"),
+    ], "cdb's text stays out, and a line split between chunks comes back whole, in its own stream"
+
+
+def test_the_output_view_shows_an_unfinished_line_after_a_quiet_read(tmp_path):
+    path = tmp_path / "events.jsonl"
+    log = EventLog(path)
+    view = OutputView(path)
+    log.write("out", cmd=1, stream="stdout", text="name? ")
+    assert _output(view) == [], "a line still arriving waits for its newline"
+    assert _output(view) == [("stdout", "name? ")], "a prompt left waiting shows once the output goes quiet"
+    log.write("out", cmd=1, stream="stdout", text="gabi\n")
+    log.close()
+    assert _output(view) == [("stdout", "gabi")]
+
+
+def test_the_output_view_paints_ansi_colors_and_hides_the_escape_codes(tmp_path):
+    path = tmp_path / "events.jsonl"
+    _log(path, [("out", {"cmd": 1, "stream": "stdout", "text": "\x1b[34mok\x1b[0m done\n"})])
+    [(_, text)] = OutputView(path).read()
+    assert text.plain == "ok done", "escape codes don't show as text"
+    [span] = text.spans
+    assert (span.start, span.end, span.style.color.number) == (0, 2, 4), f"'ok' stays ANSI blue: {span}"
+
+
+def test_the_log_view_paints_the_programs_colors_instead_of_printing_escape_codes(tmp_path):
+    path = tmp_path / "events.jsonl"
+    _log(
+        path,
+        [
+            ("cmd", {"cmd": 1, "line": "g"}),
+            ("out", {"cmd": 1, "stream": "stdout", "text": "\x1b[33mwarn\x1b[0m: retry\n"}),
+        ],
+    )
+    lines = [line.plain for line in LogView(path).read()]
+    assert "warn: retry" in lines and not any("\x1b" in line for line in lines), lines
+
+
+def test_the_output_view_shows_only_the_last_redraw_of_a_progress_line(tmp_path):
+    path = tmp_path / "events.jsonl"
+    _log(path, [("out", {"cmd": 1, "stream": "stderr", "text": " 10%\r 60%\r100%\n"})])
+    assert _output(OutputView(path)) == [("stderr", "100%")], "a terminal would show only the last redraw"
 
 
 def test_the_tail_starts_over_when_a_rotation_shrinks_the_file(tmp_path):

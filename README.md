@@ -88,6 +88,7 @@ Native targets with PDBs and .NET targets (SOS loads on its own) both work. The 
 - **Attached targets** get `-pd`, so they survive even if the daemon is killed.
 - **Each session** writes `events.jsonl` (every command, every chunk of output, every event) and `meta.json` under `%LOCALAPPDATA%\debugueira\sessions\`. History is those folders. They're pruned after 90 days or 2 GB.
 - **The daemon** also keeps one journal across all sessions, for people: `debugueira events` reads it, `debugueira watch` shows it live. Colored output appears only at a real terminal, never in an agent's pipe.
+- **`watch` shows what the programs print,** in their own colors: every session and both streams by default, with `err` marked in words. `s` narrows to stdout or stderr, `o` to one session, `z` zooms the output to the whole screen. A target's children share its two pipes, so output can't be split by process. Many programs drop color when writing to a pipe; `--env FORCE_COLOR=1` or `--env CLICOLOR_FORCE=1` brings it back for many.
 
 Settings live in `%LOCALAPPDATA%\debugueira\config.toml` (all optional): `cdb_path`, `idle_minutes`, `idle_cap_hours`, `daemon_idle_minutes`, `retention_days`, `retention_gb`, `head_lines`, `tail_lines`, `symbol_path`.
 
