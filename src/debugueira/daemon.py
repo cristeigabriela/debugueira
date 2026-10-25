@@ -110,9 +110,24 @@ class Daemon:
             rec.meta.update(ended=time.time(), end_reason="daemon died")
             (rec.dir / "meta.json").write_text(json.dumps(rec.meta, indent=2), encoding="utf-8")
 
+    def owns_daemon_file(self) -> bool:
+        """Whether `daemon.json` still exists and names this process.
+
+        It stops naming us when the home is deleted out from under a live daemon (a reset, or `rm -rf`).
+        We then hold the pipe forever and every new daemon fails to bind it, so instead we exit.
+        """
+        try:
+            return json.loads(config.daemon_file().read_text(encoding="utf-8")).get("pid") == os.getpid()
+        except (OSError, ValueError):
+            return False
+
     def reaper(self) -> None:
         while not self.stopping:
             time.sleep(2)
+            if self.stopping:
+                return  # a `daemon stop` is already tearing down; don't race it
+            if not self.owns_daemon_file():
+                self.shutdown("daemon.json gone (home removed); releasing the pipe")
             for name, session in list(self.sessions.items()):
                 if session.ended:
                     self.forget(name)

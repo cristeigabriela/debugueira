@@ -127,6 +127,22 @@ def test_when_the_daemon_dies_launched_targets_die_and_attached_ones_survive(dbg
     ), "and a new session starts normally"
 
 
+def test_a_daemon_whose_home_was_removed_exits_so_a_fresh_one_can_start(dbg):
+    """Deleting the home (a reset, or `rm -rf`) used to wedge the daemon: it kept holding the named pipe,
+
+    so every new daemon failed to bind it ("access denied") and the client saw no daemon.json forever.
+    Now the daemon notices its daemon.json is gone and exits, releasing the pipe.
+    """
+    dbg.ok("list")  # bring up a daemon
+    pid = dbg.daemon_pid()
+    assert pid and winapi.creation_time(pid) is not None, "a daemon should be running"
+    (dbg.home / "daemon.json").unlink()
+    dbg.wait_until(
+        lambda: winapi.creation_time(pid) is None, 15, "the daemon to notice its home vanished and exit"
+    )
+    assert "no live sessions" in dbg.ok("list"), "a new command brings up a clean daemon, not a wedge"
+
+
 def test_a_finished_session_stays_readable_with_log_grep_and_query(dbg, targets):
     dbg.ok("start", "--name", "h", "--", str(targets["hello"]))
     dbg.ok("cmd", "h", "bp hello!add")
