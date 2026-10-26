@@ -1,11 +1,30 @@
 name: Release
 
+# Three ways in, one build: push a tag (with or without a leading v), publish a release in GitHub's UI, or
+# run it by hand for a tag that already exists. An existing release only gets the files attached; its
+# title and notes stay as written.
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "[0-9]*"]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag to build and attach files to, e.g. 0.1.0"
+        required: true
 
 permissions:
   contents: write
+
+env:
+  TAG: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+
+# A release made in the UI can also push its tag, so one tag may start two runs. They take turns, and the
+# second only uploads the same files again.
+concurrency:
+  group: release-${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -13,6 +32,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
 
       - uses: astral-sh/setup-uv@v6
 
@@ -43,15 +64,21 @@ jobs:
         shell: pwsh
         run: |
           $version = uv run python -c "import debugueira; print(debugueira.__version__)"
-          if ("v$version" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} != version v$version" }
+          if ($env:TAG.TrimStart("v") -ne $version) { throw "tag $env:TAG != version $version" }
 
       - name: Build the installer and zip
         run: uv run python packaging/build.py
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/debugueira-*-setup.exe
-            dist/debugueira-*-win-x64.zip
-            dist/SHA256SUMS.txt
-          generate_release_notes: true
+      - name: Attach to the release, or create it
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = @(Get-ChildItem dist/debugueira-*-setup.exe, dist/debugueira-*-win-x64.zip, dist/SHA256SUMS.txt)
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG @files --clobber
+          } else {
+            gh release create $env:TAG @files --title $env:TAG --generate-notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw "publishing the release failed" }
