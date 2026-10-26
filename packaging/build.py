@@ -90,7 +90,8 @@ def main() -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
     sums = [f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}" for p in (setup, archive)]
-    (DIST / "SHA256SUMS.txt").write_text("\n".join(sums) + "\n", encoding="utf-8")
+    # LF endings: `sha256sum -c` reads a CRLF line's file name with the \r on it.
+    (DIST / "SHA256SUMS.txt").write_text("\n".join(sums) + "\n", encoding="utf-8", newline="\n")
     print("\n".join(sums))
     return 0
 
