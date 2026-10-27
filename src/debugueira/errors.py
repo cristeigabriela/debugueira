@@ -48,7 +48,8 @@ class SessionEndedError(DebugueiraError):
 
     def __init__(self, name: str, reason: str):
         super().__init__(
-            f"session {name!r} has ended ({reason}): its log stays readable with `log` and `grep`"
+            f"session {name!r} has ended ({reason}): its log stays readable with `log`, `grep` and "
+            f"`history show {name}`"
         )
         self.name = name
         self.reason = reason

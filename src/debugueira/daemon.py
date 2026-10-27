@@ -18,7 +18,7 @@ from dataclasses import fields
 from multiprocessing.connection import Listener
 
 from . import config, history, journal, winapi
-from .errors import DebugueiraError, NoSuchSessionError, SessionExistsError, UsageError
+from .errors import DebugueiraError, NoSuchSessionError, SessionEndedError, SessionExistsError, UsageError
 from .eventlog import read_events, transcript
 from .session import Session, StartSpec
 from .tidy import tidy
@@ -188,6 +188,10 @@ class Daemon:
         with self.lock:
             s = self.sessions.get(name)
         if s is None:
+            # A stopped session is gone from here but not from disk: saying it never existed sends the
+            # agent looking for it, while `log` and `grep` still find it.
+            if rec := history.finished(name):
+                raise SessionEndedError(name, rec.meta.get("end_reason") or "ended")
             raise NoSuchSessionError(name)
         return s
 

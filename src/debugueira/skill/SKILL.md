@@ -161,6 +161,6 @@ SOS loads by itself when the runtime loads. A .NET app's `.exe` shows up as `app
 
 - **No symbols:** PDBs next to the exe load automatically. Otherwise use `--sym C:\pdbs` (repeatable), then `.reload /f` and `lm`. `lmv m mod` says whether a PDB loaded and matches. A frame like `mod!SomeExport+0x16e1` from a module with no PDB names only the nearest export, not the real function. The first load of a big PDB (hundreds of MB) is slow: give that command `--timeout 300`.
 - **Which file is running:** `lm` shows a launched target's name only. `!peb` (`ImageFile`) or `|.` has its full path on disk.
-- **"no session named":** `debugueira list`, or `debugueira history` for finished ones.
+- **"no session named":** `debugueira list`, or `debugueira history`. A session you stopped says `has ended` instead: `log`, `grep` and `history show` still read it.
 - **Setup problems:** `debugueira doctor`.
 - **A frozen attached target** (history says `daemon died`, and it makes no progress): attach again and run `~`. Under a session, a healthy thread reads `Suspend: 1`. Resume each thread that reads more with `~Nm` (`~*m` for all), until each reads 1. Then `!chkimg -f MODULE` restores any stray `int 3` in that module: run it for each module that had breakpoints, usually the program's own (`!chkimg -f app`). Then `g`: if it stops at a leftover break exception, that's the event cdb died on. Then `stop`.

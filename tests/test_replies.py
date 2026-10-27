@@ -94,6 +94,16 @@ def test_a_noninvasive_attach_is_not_logged_as_an_exception(dbg, targets, spawn)
     dbg.ok("stop", "nv")
 
 
+def test_commands_on_a_stopped_session_say_it_ended_not_that_it_never_existed(dbg, targets):
+    dbg.ok("start", "--name", "h", "--", str(targets["hello"]))
+    dbg.ok("stop", "h")
+    for args in (("cmd", "h", "k"), ("procs", "h"), ("wait", "h", "--timeout", "1")):
+        r = dbg(*args)
+        assert r.code == 4 and "has ended" in r.err and "history show h" in r.err, f"{args}:\n{r}"
+    r = dbg("cmd", "never", "k")
+    assert r.code == 2 and "no session named" in r.err, f"a name that never ran is still unknown:\n{r}"
+
+
 def test_a_session_that_dies_at_start_says_why(dbg, targets, spawn):
     _, pid = spawn(targets["loop"])
     dbg.ok("attach", "--name", "a", "--pid", str(pid))

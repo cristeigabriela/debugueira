@@ -90,6 +90,11 @@ def resolve(ref: str) -> Record:
     raise NoSuchSessionError(ref)
 
 
+def finished(ref: str) -> Record | None:
+    """The newest finished session with this exact name or id, if there is one."""
+    return next((r for r in records() if not r.live and ref in (r.name, r.id)), None)
+
+
 def summary(rec: Record) -> str:
     """Target, outcome, each command with its first line of output, and the note."""
     m = rec.meta
