@@ -12,7 +12,7 @@ from debugueira.eventlog import EventLog, grep, read_events, transcript
 from debugueira.minidump import MEMORY64_LIST, MEMORY_LIST
 from debugueira.query import Out, hexint
 from debugueira.session import Proc, StartSpec, cdb_argv, process_rows, setup_commands
-from debugueira.tidy import tidy
+from debugueira.tidy import DEBUGGER_TRAFFIC, exceptions, tidy
 
 
 @pytest.mark.parametrize(
@@ -287,6 +287,28 @@ def test_module_loads_in_several_processes_fold_each_name_once_with_a_count():
     assert tidy(text) == "[3 module loads: kernel.appcore.dll ×3]\n", (
         "three names alike read as one DLL thrice"
     )
+
+
+@pytest.mark.parametrize("code", sorted(DEBUGGER_TRAFFIC), ids=lambda c: DEBUGGER_TRAFFIC[c])
+def test_debugger_traffic_is_never_a_crash(code):
+    text = f"(3ba8.1d2c): Something - code {code} (first chance)\n"
+    assert exceptions(text) == [], "events and procs would list the debugger's own signal as a crash"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "c0000005",  # access violation
+        "c0000409",  # a fail-fast, such as a Rust panic=abort or a /GS check
+        "e06d7363",  # a C++ throw
+        "e0434352",  # a .NET exception
+        "40000015",  # STATUS_FATAL_APP_EXIT from abort(): informational severity, still a crash
+        "80000002",  # misaligned data: warning severity like a breakpoint, still a fault
+    ],
+)
+def test_real_faults_are_crashes_whatever_their_severity(code):
+    text = f"(3ba8.1d2c): Something - code {code} (first chance)\n"
+    assert [f.code for f in exceptions(text)] == [code], "a real fault must reach events and procs"
 
 
 def test_clr_notifications_drop_out_so_the_module_loads_around_them_fold():

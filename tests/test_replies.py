@@ -82,6 +82,18 @@ def test_noninvasive_attach_reads_memory_and_leaves_the_target_running(dbg, targ
     assert proc.poll() is None
 
 
+def test_a_noninvasive_attach_is_not_logged_as_an_exception(dbg, targets, spawn):
+    _, pid = spawn(targets["loop"])
+    dbg.ok("attach", "--name", "nv", "--pid", str(pid), "--noninvasive")
+    events = [json.loads(ln) for ln in dbg.ok("events", "--session", "nv", "--json").splitlines()]
+    assert [e["event"] for e in events if e["event"] == "exception"] == [], (
+        f"the attach's own wake-up isn't a crash:\n{events}"
+    )
+    procs = json.loads(dbg.ok("procs", "nv", "--json"))["processes"]
+    assert [p["crash"] for p in procs] == [""], f"nor does the process carry it as one:\n{procs}"
+    dbg.ok("stop", "nv")
+
+
 def test_a_session_that_dies_at_start_says_why(dbg, targets, spawn):
     _, pid = spawn(targets["loop"])
     dbg.ok("attach", "--name", "a", "--pid", str(pid))

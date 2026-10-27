@@ -46,16 +46,21 @@ _EXCEPTION = re.compile(
 )
 # Exceptions that pass through without stopping the target, so they're never a stop's reason.
 _PASS_THROUGH = {"e0444143", "04242420"}
-# Debugger traffic, not failures: breakpoints (also WOW64's), single steps, thread naming, debug output.
-_NOT_A_CRASH = _PASS_THROUGH | {
-    "80000003",
-    "80000004",
-    "4000001f",
-    "4000001e",
-    "406d1388",
-    "40010006",
-    "4001000a",
+# Debugger traffic, not failures: what a debugger, a console or the program itself raises to talk to the
+# debugger. Listed as each would otherwise show in `events` and `procs` as a crash.
+DEBUGGER_TRAFFIC = {
+    "80000003": "STATUS_BREAKPOINT",
+    "80000004": "STATUS_SINGLE_STEP",
+    "80000007": "STATUS_WAKE_SYSTEM_DEBUGGER",  # the first stop of a noninvasive attach
+    "4000001f": "STATUS_WX86_BREAKPOINT",  # WOW64's breakpoint
+    "4000001e": "STATUS_WX86_SINGLE_STEP",
+    "40010005": "DBG_CONTROL_C",  # Ctrl+C in a debugged console program
+    "40010008": "DBG_CONTROL_BREAK",
+    "40010006": "DBG_PRINTEXCEPTION_C",  # OutputDebugStringA
+    "4001000a": "DBG_PRINTEXCEPTION_WIDE_C",  # OutputDebugStringW
+    "406d1388": "MS_VC_EXCEPTION",  # naming a thread the old way
 }
+_NOT_A_CRASH = _PASS_THROUGH | DEBUGGER_TRAFFIC.keys()
 _BREAKPOINT = re.compile(r"^Breakpoint (?P<n>\d+) hit", re.MULTILINE)
 
 
