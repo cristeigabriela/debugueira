@@ -201,6 +201,25 @@ def test_an_empty_command_is_refused_because_it_would_repeat_the_last_one(dbg, t
     assert r.code == 1 and "repeat the last one" in r.err, str(r)
 
 
+def test_a_newline_in_a_breakpoints_printf_gets_a_note_and_echo_ends_the_line(dbg, targets):
+    dbg.ok("start", "--name", "h", "--", str(targets["hello"]))
+    noted = dbg.ok("cmd", "h", 'bp hello!add ".printf \\"a=%d\\n\\", @ecx; gc"')
+    assert "[note: inside a breakpoint's command" in noted, noted
+    dbg.ok("cmd", "h", "bc *")
+    quiet = dbg.ok("cmd", "h", 'bp hello!add ".printf \\"a=%d\\", @ecx; .echo; gc"')
+    assert "[note:" not in quiet, quiet
+    out = dbg("cmd", "h", "g").out
+    assert re.search(r"^a=2$", out, re.MULTILINE), f"the note's advice must give the hit its own line:\n{out}"
+
+
+def test_an_argument_that_lost_its_backslashes_gets_a_note_even_under_json(dbg, targets):
+    dbg.env["MSYSTEM"] = "MINGW64"  # as Git Bash sets it, whichever shell runs the tests
+    r = dbg("start", "--name", "h", "--json", "--", str(targets["hello"]), "C:pathtoinput.txt")
+    assert r.code == 0, str(r)
+    assert json.loads(r.out)["session"] == "h", "the note mustn't break the JSON on stdout"
+    assert "[note: 'C:pathtoinput.txt' looks like a Windows path" in r.err, str(r)
+
+
 def test_bad_regexes_get_a_plain_message(dbg, targets):
     dbg.ok("start", "--name", "h", "--", str(targets["hello"]))
     for args in (("grep", "h", "("), ("wait", "h", "--for", "(")):

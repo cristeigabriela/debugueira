@@ -17,7 +17,7 @@ import time
 from importlib import resources
 from pathlib import Path
 
-from . import __version__, client, config, history, journal, output, query, style, winapi
+from . import __version__, advice, client, config, history, journal, output, query, style, winapi
 from .cdb import find_cdb
 from .errors import DebugueiraError
 from .eventlog import TARGET_STREAMS, program_output, read_events, transcript
@@ -29,6 +29,19 @@ from .tidy import tidy
 def _print(text: str) -> None:
     if text:
         sys.stdout.write(text if text.endswith("\n") else text + "\n")
+
+
+def _notes(notes: list[str], args) -> None:
+    # First, so they show even when the request then fails, as a launch with a mangled exe path does.
+    # Under --json they go to stderr, which keeps stdout one JSON document.
+    stream = sys.stderr if getattr(args, "json", False) else sys.stdout
+    for note in notes:
+        stream.write(style.paint(f"[note: {note}]", "yellow", stream=stream) + "\n")
+
+
+def _path_args(args) -> list[str]:
+    """The paths a session-starting command was given, as typed."""
+    return [*args.sym, *args.src, *([args.cwd] if getattr(args, "cwd", None) else [])]
 
 
 def show(reply: dict, args) -> int:
@@ -73,6 +86,7 @@ def cmd_start(args) -> int:
     if not args.program:
         raise DebugueiraError("give the program after `--`, e.g. `debugueira start -- C:\\path\\app.exe arg`")
     target = list(args.program)
+    _notes(advice.shell_args([*target, *_path_args(args)]), args)
     exe = shutil.which(target[0]) or target[0]
     target[0] = os.path.abspath(exe) if os.path.exists(exe) else exe
     spec["target"] = target
@@ -94,6 +108,7 @@ def cmd_attach(args) -> int:
             raise DebugueiraError(
                 f"{len(pids)} processes are named {args.process!r} ({listed}): pick one with --pid"
             )
+    _notes(advice.shell_args(_path_args(args)), args)
     spec = spec_from(args, "attach")
     spec.update(pid=args.pid or 0, process_name=args.process or "", noninvasive=args.noninvasive)
     return show(client.request("start", spec=spec, timeout=args.timeout + 30), args)
@@ -133,6 +148,7 @@ def cmd_peek(args) -> int:
 
 
 def cmd_open(args) -> int:
+    _notes(advice.shell_args([args.dump, *_path_args(args)]), args)
     if not os.path.isfile(args.dump):
         raise DebugueiraError(f"no dump file at {args.dump}")
     with open(args.dump, "rb") as f:
@@ -178,6 +194,7 @@ def positive(value: str) -> float:
 
 
 def cmd_cmd(args) -> int:
+    _notes(advice.command(args.line), args)
     return show(client.request("cmd", name=args.name, line=args.line, timeout=args.timeout), args)
 
 

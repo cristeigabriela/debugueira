@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from debugueira import config, history, minidump, output
+from debugueira import advice, config, history, minidump, output
 from debugueira.cdb import PROMPT
 from debugueira.eventlog import EventLog, grep, read_events, transcript
 from debugueira.minidump import MEMORY64_LIST, MEMORY_LIST
@@ -287,6 +287,63 @@ def test_module_loads_in_several_processes_fold_each_name_once_with_a_count():
     assert tidy(text) == "[3 module loads: kernel.appcore.dll ×3]\n", (
         "three names alike read as one DLL thrice"
     )
+
+
+@pytest.mark.parametrize(
+    ("line", "warned"),
+    [
+        (r'bp app!f ".printf \"x=%d\n\", @ecx; gc"', True),
+        (r'bu app!f ".printf \"x\n\"; gc"', True),
+        (r'bm app!do_* ".printf \"x\n\"; gc"', True),
+        (r'ba r4 0x1000 ".printf \"x\n\"; gc"', True),
+        (r'~0 bp app!f ".printf \"x\n\"; gc"', True),
+        (r'bp0 app!f ".printf \"x\n\"; gc"', True),  # with its own breakpoint id
+        (r'bc *; bp app!f ".printf \"x\n\"; gc"', True),  # later in a chain
+        (r'bp app!f "gc"; bp app!g ".printf \"x\n\"; gc"', True),  # in the second of two
+        (r'bp app!f ".printf \"x\\n\", @ecx; gc"', False),  # `\\n` does end the line
+        (r'bp app!f ".printf \"x\"; .echo; gc"', False),
+        (r'.printf "x\n"', False),  # at the prompt, `\n` works
+        (r'bl; .printf "x\n"', False),  # the `\n` isn't in a breakpoint's command
+        (r'bp app!f "gc"; .printf "ready\n"', False),  # after the breakpoint's string closed
+        (r"bp app!f", False),
+    ],
+    ids=[
+        "bp", "bu", "bm", "ba", "thread", "id", "chained", "second", "escaped", "echo", "prompt", "not-bp",
+        "after-string", "no-command",
+    ],
+)  # fmt: skip
+def test_a_newline_in_a_breakpoints_command_gets_a_note(line, warned):
+    assert bool(advice.command(line)) == warned, "cdb prints that `\\n` as a space, and only there"
+
+
+_GIT_BASH = {"MSYSTEM": "MINGW64", "EXEPATH": "C:\\Program Files\\Git\\bin"}
+
+
+@pytest.mark.parametrize(
+    ("arg", "env", "warned"),
+    [
+        ("C:/", _GIT_BASH, True),  # `/c`
+        ("C:/Program Files/Git/foo/bar", _GIT_BASH, True),  # `/foo/bar`
+        ("C:pathtoapp.exe", _GIT_BASH, True),  # an unquoted `C:\path\to\app.exe`
+        ("--input=C:dirfile.txt", _GIT_BASH, True),  # the value of `--input=C:\dir\file.txt`
+        ("--root=C:/", _GIT_BASH, True),  # `--root=/c`
+        ("C:", {"MSYSTEM": "MINGW64"}, False),
+        ("C:/", {"MSYSTEM": "MINGW64"}, True),  # Git Bash with no EXEPATH still rewrites `/c`
+        ("C:/", {}, False),  # PowerShell's `--cwd C:/` means it
+        ("C:pathtoapp.exe", {}, False),
+        ("C:/Program Files/Git/foo/bar", {}, False),
+        ("C:\\path\\app.exe", _GIT_BASH, False),
+        ("D:/dev/app/target/debug", _GIT_BASH, False),  # forward slashes on purpose
+        ("C:\\Program Files\\Git\\usr\\bin\\bash.exe", _GIT_BASH, False),  # typed with backslashes
+        ("--port", _GIT_BASH, False),
+        ("http://localhost:8080", _GIT_BASH, False),
+    ],
+    ids=["switch", "posix-path", "drive-relative", "option-value", "option-switch", "bare-drive",
+         "no-exepath", "powershell-root", "powershell-relative", "powershell-git", "windows", "forward",
+         "backslashed", "flag", "url"],
+)  # fmt: skip
+def test_an_argument_the_shell_rewrote_gets_a_note(arg, env, warned):
+    assert bool(advice.shell_args([arg], env)) == warned, "the target would get a path it was never given"
 
 
 @pytest.mark.parametrize("code", sorted(DEBUGGER_TRAFFIC), ids=lambda c: DEBUGGER_TRAFFIC[c])

@@ -18,7 +18,7 @@ debugueira cmd app "k; r rcx, rdx"                     # where it stopped; at a 
 debugueira stop app                                    # always stop when done
 ```
 
-**Quote Windows paths** in shell commands: Git Bash drops the backslashes of an unquoted `C:\path`.
+**Quote Windows paths** in shell commands: Git Bash drops the backslashes of an unquoted `C:\path`. It also rewrites a `/c`-style argument into a path (`cmd.exe /c` launches `cmd.exe C:/`): prefix the command with `MSYS_NO_PATHCONV=1`, or write `//c`. A reply that starts with `[note: ...]` caught one of these, or another line that runs but not as meant: read it before going on.
 
 **Sessions are shared by everything running as your user**, other agents included. Always pass `--name` with a name of your own (a common prefix helps: `history --name myprefix`); `list` may show sessions that aren't yours, so leave those alone.
 
@@ -102,6 +102,7 @@ What a snippet prints is trimmed like any reply (`--full` to keep it all), and o
 
 - **Name the module the way the debugger does.** `lm m <pattern>` shows it. An injected or renamed DLL loads under another name, and a breakpoint on a name that doesn't exist only goes deferred and never hits. Resolve with `x <module>!*name*`, and check `bl` shows the breakpoint bound before you `g`.
 - **In generic or inlined code, break on functions, not source lines.** A line that maps to several addresses fails with `Ambiguous symbol error`. Use `bp mod!crate::module::function`, or `bm mod!crate::module::do_*` for a family.
+- **To print from a breakpoint, end each line with `.echo`:** `bp mod!func ".printf \"x=%d\", @ecx; .echo; gc"`. Inside a breakpoint's command, cdb prints `.printf`'s `\n` as a space, so every hit runs into one long line.
 - **On a hot path** (a hook that runs for every call), break past the filter that picks your case, add a condition, or use `bp /1`. Otherwise every stop is an unrelated hit.
 - **When another process waits on this one** (a proxy, a handshake with a timeout), don't hold a stop for long. Set the breakpoints and `g` in one `cmd`. Load a big PDB before the timed part (any `x mod!*` does it), or break by address: an address holds only for that exact image.
 
